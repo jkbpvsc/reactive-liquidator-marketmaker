@@ -341,7 +341,7 @@ async function main() {
       setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
       await findTriggerOrderCandidates(mangoGroup, cache, perpMarkets, mangoAccounts, triggerCandidates);
       mangoAccounts.splice(0, mangoAccounts.length);
-      console.timeEnd('getAllMangoAccounts');
+      // console.timeEnd('getAllMangoAccounts');
     } catch (err) {
       console.error('Error reloading accounts', err);
     } finally {
