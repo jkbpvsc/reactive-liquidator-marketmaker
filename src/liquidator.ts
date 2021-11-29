@@ -82,7 +82,7 @@ const client = new MangoClient(connection, mangoProgramId);
 let mangoSubscriptionId = -1;
 let dexSubscriptionId = -1;
 
-type PerpTriggerElement = { mangoAccount: MangoAccount, order: PerpTriggerOrder, index: number };
+type PerpTriggerElement = { mangoAccount: MangoAccount, order: PerpTriggerOrder, index: number } | null;
 
 async function findTriggerOrderCandidates(
   mangoGroup: MangoGroup,
@@ -185,6 +185,9 @@ async function processTriggerOrderQueue(
     perpTriggerOrderQueue: PerpTriggerElement[],
 ) {
   await Promise.all(perpTriggerOrderQueue.map(async (queueElement: PerpTriggerElement, index: number) => {
+    if (!queueElement) {
+      return
+    }
     if (!groupIds) {
       throw new Error(`Group ${groupName} not found`);
     }
@@ -213,7 +216,8 @@ async function processTriggerOrderQueue(
         console.log(
             `EXECUTE order for account ${mangoAccount.publicKey.toBase58()}`,
         );
-        perpTriggerOrderQueue.splice(index, 1)
+
+        perpTriggerOrderQueue[index] = null
 
         activeTxRequest[cacheKey] = true;
 
