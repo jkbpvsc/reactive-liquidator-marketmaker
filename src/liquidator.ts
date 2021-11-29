@@ -341,9 +341,9 @@ async function main() {
   await refreshAccounts()
 
   connection.onSlotUpdate(async (e: SlotUpdate) => {
-    if (e.slot % 2 == 0) {
-      return
-    }
+    // if (e.slot % 2 == 0) {
+    //   return
+    // }
     if (poorMansSemaphore.refreshing) {
       // console.log('Accounts being updated, ignoring slot update');
       return
