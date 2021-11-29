@@ -277,7 +277,7 @@ async function checkSuspiciousAccounts(
 function resetCache(key) {
   setTimeout(() => {
     activeTxRequest[key] = undefined
-  }, 30000);
+  }, 300000);
 }
 
 async function main() {
