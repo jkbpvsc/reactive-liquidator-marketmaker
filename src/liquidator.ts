@@ -214,10 +214,6 @@ async function checkSuspiciousAccounts(
   liqorMangoAccount: MangoAccount,
 ) {
   await Promise.all(mangoAccounts.map(async (account, i) => {
-    if (i < 5 && process.env.LOG_HEALTH) {
-      console.log(`Checking ${account.publicKey.toString()}, health: ${account.getHealthRatio(mangoGroup, cache, 'Maint').toFixed(4)}`)
-    }
-
     if (account.isLiquidatable(mangoGroup, cache)) {
       await account.reload(connection, mangoGroup.dexProgramId);
 
@@ -286,14 +282,14 @@ async function main() {
   const refreshAccounts = async () => {
     poorMansSemaphore.refreshing = true;
     try {
-      //console.log('Refreshing accounts...');
-      //console.time('getAllMangoAccounts');
+      console.log('Refreshing accounts...');
+      console.time('getAllMangoAccounts');
       const mangoAccounts = await client.getAllMangoAccounts(mangoGroup, undefined, true);
-      //console.log(`Fetched ${mangoAccounts.length} accounts`);
+      console.log(`Fetched ${mangoAccounts.length} accounts`);
       setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
       await findTriggerOrderCandidates(mangoGroup, cache, perpMarkets, mangoAccounts, triggerCandidates);
       mangoAccounts.splice(0, mangoAccounts.length);
-      //console.timeEnd('getAllMangoAccounts');
+      console.timeEnd('getAllMangoAccounts');
     } catch (err) {
       console.error('Error reloading accounts', err);
     } finally {
@@ -341,9 +337,9 @@ async function main() {
   await refreshAccounts()
 
   connection.onSlotUpdate(async (e: SlotUpdate) => {
-    // if (e.slot % 2 == 0) {
-    //   return
-    // }
+    if (e.slot % 2 == 0) {
+      return
+    }
     if (poorMansSemaphore.refreshing) {
       // console.log('Accounts being updated, ignoring slot update');
       return
