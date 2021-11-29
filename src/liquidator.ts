@@ -342,14 +342,14 @@ async function main() {
       return
     }
     if (poorMansSemaphore.refreshing) {
-      console.log('Accounts being updated, ignoring slot update');
+      // console.log('Accounts being updated, ignoring slot update');
       return
     }
     if (e.type != "optimisticConfirmation") {
       return
     }
 
-    console.log(`Handling slot ${e.slot}`);
+    // console.log(`Handling slot ${e.slot}`);
     console.time(`onSlotUpdate ${e.slot}`);
     cache = await mangoGroup.loadCache(connection)
     await Promise.all(
