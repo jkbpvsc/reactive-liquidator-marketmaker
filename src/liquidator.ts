@@ -202,15 +202,17 @@ async function processTriggerOrderQueue(
         (trigger.triggerCondition == 'below' &&
             currentPrice.lt(trigger.triggerPrice))
     ) {
-      console.log(
-          `Executing order for account ${mangoAccount.publicKey.toBase58()}`,
-      );
+
       const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement.index}`;
       try {
         if (activeTxRequest[cacheKey]) {
-          console.log(`Tx ${cacheKey} active, skipping`)
+          console.log(`SKIP: ${cacheKey}`)
           return
         }
+
+        console.log(
+            `EXECUTE order for account ${mangoAccount.publicKey.toBase58()}`,
+        );
 
         activeTxRequest[cacheKey] = true;
 
@@ -251,7 +253,7 @@ async function checkSuspiciousAccounts(
       const cacheKey = `liquidate-${account.publicKey.toString()}}`;
       try {
         if (activeTxRequest[cacheKey]) {
-          console.log(`Tx ${cacheKey} active, skipping`)
+          console.log(`SKIP: ${cacheKey} active, skipping`)
           return
         }
 
