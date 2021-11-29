@@ -75,10 +75,6 @@ const connection = new Connection(
   'processed' as Commitment,
 );
 
-const connectionFast = new Connection(
-    process.env.ENDPOINT_URL_FAST || (process.env.ENDPOINT_URL || config.cluster_urls[cluster]),
-    'singleGossip' as Commitment,
-)
 const client = new MangoClient(connection, mangoProgramId);
 
 let mangoSubscriptionId = -1;
@@ -217,8 +213,10 @@ async function checkSuspiciousAccounts(
   perpMarkets: PerpMarket[],
   liqorMangoAccount: MangoAccount,
 ) {
-  await Promise.all(mangoAccounts.map(async (account) => {
-    console.log(`Checking ${account.publicKey.toString()}, health: ${account.getHealthRatio(mangoGroup, cache, 'Maint').toFixed(4)}`)
+  await Promise.all(mangoAccounts.map(async (account, i) => {
+    if (i < 5 && process.env.LOG_HEALTH) {
+      console.log(`Checking ${account.publicKey.toString()}, health: ${account.getHealthRatio(mangoGroup, cache, 'Maint').toFixed(4)}`)
+    }
 
     if (account.isLiquidatable(mangoGroup, cache)) {
       await account.reload(connection, mangoGroup.dexProgramId);
@@ -356,7 +354,7 @@ async function main() {
 
     // console.log(`Handling slot ${e.slot}`);
     console.time(`onSlotUpdate ${e.slot}`);
-    cache = await mangoGroup.loadCache(connectionFast)
+    cache = await mangoGroup.loadCache(connection)
     await Promise.all(
         [
           await processTriggerOrderQueue(mangoGroup, cache, perpMarkets, triggerCandidates),
