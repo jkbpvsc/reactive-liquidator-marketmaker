@@ -334,10 +334,10 @@ async function main() {
   const refreshAccounts = async () => {
     poorMansSemaphore.refreshing = true;
     try {
-      console.log('Refreshing accounts...');
-      console.time('getAllMangoAccounts');
+      // console.log('Refreshing accounts...');
+      // console.time('getAllMangoAccounts');
       const mangoAccounts = await client.getAllMangoAccounts(mangoGroup, undefined, true);
-      console.log(`Fetched ${mangoAccounts.length} accounts`);
+      // console.log(`Fetched ${mangoAccounts.length} accounts`);
       setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
       await findTriggerOrderCandidates(mangoGroup, cache, perpMarkets, mangoAccounts, triggerCandidates);
       mangoAccounts.splice(0, mangoAccounts.length);
@@ -402,7 +402,7 @@ async function main() {
     }
 
     // console.log(`Handling slot ${e.slot}`);
-    console.time(`onSlotUpdate ${e.slot}`);
+    // console.time(`onSlotUpdate ${e.slot}`);
     cache = await mangoGroup.loadCache(connection)
     await Promise.all(
         [
@@ -410,7 +410,7 @@ async function main() {
           await checkSuspiciousAccounts(susMangoAccounts, mangoGroup, cache, spotMarkets, rootBanks, perpMarkets, liqorMangoAccount)
         ]
     )
-    console.timeEnd(`onSlotUpdate ${e.slot}`)
+    // console.timeEnd(`onSlotUpdate ${e.slot}`)
   });
 
   //eslint-disable-next-line
@@ -656,8 +656,8 @@ function setSuspiciousAccounts(
 
   let worstAccounts = susAccounts.splice(0, susBatchSize);
   suspiciousAccounts.splice(0, susAccounts.length, ...worstAccounts);
-  console.log(`Observing ${suspiciousAccounts.length}`)
-  suspiciousAccounts.forEach(s => console.log(`Account: ${s.publicKey.toString()}, health: ${s.getHealthRatio(mangoGroup, cache, 'Maint').toNumber()}`));
+  // console.log(`Observing ${suspiciousAccounts.length}`)
+  // suspiciousAccounts.forEach(s => console.log(`Account: ${s.publicKey.toString()}, health: ${s.getHealthRatio(mangoGroup, cache, 'Maint').toNumber()}`));
 }
 
 async function refreshAccounts(
