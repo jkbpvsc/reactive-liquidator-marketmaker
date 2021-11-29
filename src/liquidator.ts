@@ -184,7 +184,7 @@ async function processTriggerOrderQueue(
     perpMarkets: PerpMarket[],
     perpTriggerOrderQueue: PerpTriggerElement[],
 ) {
-  await Promise.all(perpTriggerOrderQueue.map(async (queueElement: PerpTriggerElement) => {
+  await Promise.all(perpTriggerOrderQueue.map(async (queueElement: PerpTriggerElement, index: number) => {
     if (!groupIds) {
       throw new Error(`Group ${groupName} not found`);
     }
@@ -213,6 +213,7 @@ async function processTriggerOrderQueue(
         console.log(
             `EXECUTE order for account ${mangoAccount.publicKey.toBase58()}`,
         );
+        perpTriggerOrderQueue.splice(index, 1)
 
         activeTxRequest[cacheKey] = true;
 
