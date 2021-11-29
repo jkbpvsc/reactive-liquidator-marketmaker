@@ -272,7 +272,7 @@ async function main() {
   }
 
   console.log(`Liqor Public Key: ${liqorMangoAccount.publicKey.toBase58()}`);
-  let mangoAccounts: MangoAccount[] = [];
+  //let mangoAccounts: MangoAccount[] = [];
   let susMangoAccounts: MangoAccount[] = [];
   let triggerCandidates: PerpTriggerElement[] = [];
   let poorMansSemaphore = { refreshing: false };
@@ -284,15 +284,12 @@ async function main() {
     try {
       console.log('Refreshing accounts...');
       console.time('getAllMangoAccounts');
-      mangoAccounts.splice(0, mangoAccounts.length, ...(await client.getAllMangoAccounts(
-          mangoGroup,
-          undefined,
-          true,
-      )));
+      const mangoAccounts = await client.getAllMangoAccounts(mangoGroup, undefined, true);
+      console.log(`Fetched ${mangoAccounts.length} accounts`);
       setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
       await findTriggerOrderCandidates(mangoGroup, cache, perpMarkets, mangoAccounts, triggerCandidates);
+      mangoAccounts.splice(0, mangoAccounts.length);
       console.timeEnd('getAllMangoAccounts');
-      console.log(`Fetched ${mangoAccounts.length} accounts`);
     } catch (err) {
       console.error('Error reloading accounts', err);
     } finally {
