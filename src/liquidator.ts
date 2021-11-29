@@ -192,14 +192,18 @@ async function processTriggerOrderQueue(
       console.log(
           `Executing order for account ${mangoAccount.publicKey.toBase58()}`,
       );
-      await client.executePerpTriggerOrder(
-          mangoGroup,
-          mangoAccount,
-          cache,
-          perpMarkets[configMarketIndex],
-          payer,
-          queueElement.index,
-      );
+      try {
+        await client.executePerpTriggerOrder(
+            mangoGroup,
+            mangoAccount,
+            cache,
+            perpMarkets[configMarketIndex],
+            payer,
+            queueElement.index,
+        );
+      } catch (e) {
+        console.log(e)
+      }
     }
   }))
 }
@@ -222,15 +226,19 @@ async function checkSuspiciousAccounts(
         return
       }
 
-      await liquidateAccount(
-        mangoGroup,
-        cache,
-        spotMarkets,
-        rootBanks,
-        perpMarkets,
-        account,
-        liqorMangoAccount,
-      );
+      try {
+        await liquidateAccount(
+            mangoGroup,
+            cache,
+            spotMarkets,
+            rootBanks,
+            perpMarkets,
+            account,
+            liqorMangoAccount,
+        );
+      } catch (e) {
+        console.log(e)
+      }
     }
   }))
 }
