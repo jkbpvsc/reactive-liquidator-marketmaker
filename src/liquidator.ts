@@ -74,6 +74,11 @@ const connection = new Connection(
   process.env.ENDPOINT_URL || config.cluster_urls[cluster],
   'processed' as Commitment,
 );
+
+const connectionFast = new Connection(
+    process.env.ENDPOINT_URL_FAST || (process.env.ENDPOINT_URL || config.cluster_urls[cluster]),
+    'singleGossip' as Commitment,
+)
 const client = new MangoClient(connection, mangoProgramId);
 
 let mangoSubscriptionId = -1;
@@ -116,7 +121,7 @@ async function findTriggerOrderCandidates(
   }
 
   perpTriggerOrderQueue.splice(0, perpTriggerOrderQueue.length, ...queue);
-  console.log(`Perp trigger candidate queue length`, queue.length);
+  console.log(`Observing ${queue.length} perp orders triggers`);
 }
 
 /**
@@ -213,6 +218,7 @@ async function checkSuspiciousAccounts(
   liqorMangoAccount: MangoAccount,
 ) {
   await Promise.all(mangoAccounts.map(async (account) => {
+    console.log(`Checking ${account.publicKey.toString()}, health: ${account.getHealthRatio(mangoGroup, cache, 'Maint').toFixed(4)}`)
 
     if (account.isLiquidatable(mangoGroup, cache)) {
       await account.reload(connection, mangoGroup.dexProgramId);
@@ -282,14 +288,14 @@ async function main() {
   const refreshAccounts = async () => {
     poorMansSemaphore.refreshing = true;
     try {
-      console.log('Refreshing accounts...');
-      console.time('getAllMangoAccounts');
+      //console.log('Refreshing accounts...');
+      //console.time('getAllMangoAccounts');
       const mangoAccounts = await client.getAllMangoAccounts(mangoGroup, undefined, true);
-      console.log(`Fetched ${mangoAccounts.length} accounts`);
+      //console.log(`Fetched ${mangoAccounts.length} accounts`);
       setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
       await findTriggerOrderCandidates(mangoGroup, cache, perpMarkets, mangoAccounts, triggerCandidates);
       mangoAccounts.splice(0, mangoAccounts.length);
-      console.timeEnd('getAllMangoAccounts');
+      //console.timeEnd('getAllMangoAccounts');
     } catch (err) {
       console.error('Error reloading accounts', err);
     } finally {
@@ -301,10 +307,12 @@ async function main() {
 
   // Reload Cache
   setInterval(async () => {
-    [cache, liqorMangoAccount] = await Promise.all([
-      mangoGroup.loadCache(connection),
-      liqorMangoAccount.reload(connection),
-    ]);
+    // [cache, liqorMangoAccount] = await Promise.all([
+    //   mangoGroup.loadCache(connection),
+    //   liqorMangoAccount.reload(connection),
+    // ]);
+    //
+    liqorMangoAccount = await liqorMangoAccount.reload(connection);
   }, interval);
 
   // watchAccounts(groupIds.mangoProgramId, mangoGroup, mangoAccounts);
@@ -348,7 +356,7 @@ async function main() {
 
     // console.log(`Handling slot ${e.slot}`);
     console.time(`onSlotUpdate ${e.slot}`);
-    cache = await mangoGroup.loadCache(connection)
+    cache = await mangoGroup.loadCache(connectionFast)
     await Promise.all(
         [
           await processTriggerOrderQueue(mangoGroup, cache, perpMarkets, triggerCandidates),
@@ -601,6 +609,8 @@ function setSuspiciousAccounts(
 
   let worstAccounts = susAccounts.splice(0, susBatchSize);
   suspiciousAccounts.splice(0, susAccounts.length, ...worstAccounts);
+  console.log(`Observing ${suspiciousAccounts.length}`)
+  suspiciousAccounts.forEach(s => console.log(`Account: ${s.publicKey.toString()}, health: ${s.getHealthRatio(mangoGroup, cache, 'Maint').toNumber()}`));
 }
 
 async function refreshAccounts(
