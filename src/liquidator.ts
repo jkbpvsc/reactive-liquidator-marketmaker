@@ -75,6 +75,8 @@ const connection = new Connection(
   'processed' as Commitment,
 );
 
+const activeTxRequest: {[key: string]: boolean | undefined } = {}
+
 const client = new MangoClient(connection, mangoProgramId);
 
 let mangoSubscriptionId = -1;
@@ -153,6 +155,15 @@ async function processTriggerOrders(
       console.log(
         `Executing order for account ${mangoAccount.publicKey.toBase58()}`,
       );
+
+      const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${i}`;
+      if (activeTxRequest[cacheKey]) {
+        console.log(`Tx ${cacheKey} active, skipping`)
+        return
+      }
+
+      activeTxRequest[cacheKey] = true;
+
       await client.executePerpTriggerOrder(
         mangoGroup,
         mangoAccount,
@@ -161,6 +172,8 @@ async function processTriggerOrders(
         payer,
         i,
       );
+
+      activeTxRequest[cacheKey] = undefined;
     }
   }
 }
@@ -192,7 +205,15 @@ async function processTriggerOrderQueue(
       console.log(
           `Executing order for account ${mangoAccount.publicKey.toBase58()}`,
       );
+      const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement.index}`;
       try {
+        if (activeTxRequest[cacheKey]) {
+          console.log(`Tx ${cacheKey} active, skipping`)
+          return
+        }
+
+        activeTxRequest[cacheKey] = true;
+
         await client.executePerpTriggerOrder(
             mangoGroup,
             mangoAccount,
@@ -202,7 +223,9 @@ async function processTriggerOrderQueue(
             queueElement.index,
         );
       } catch (e) {
-        console.log(e)
+        console.error(e)
+      } finally {
+        activeTxRequest[cacheKey] = undefined;
       }
     }
   }))
@@ -225,8 +248,14 @@ async function checkSuspiciousAccounts(
         console.log(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
         return
       }
-
+      const cacheKey = `liquidate-${account.publicKey.toString()}}`;
       try {
+        if (activeTxRequest[cacheKey]) {
+          console.log(`Tx ${cacheKey} active, skipping`)
+          return
+        }
+
+        activeTxRequest[cacheKey] = true;
         await liquidateAccount(
             mangoGroup,
             cache,
@@ -237,7 +266,9 @@ async function checkSuspiciousAccounts(
             liqorMangoAccount,
         );
       } catch (e) {
-        console.log(e)
+        console.error(e)
+      } finally {
+        activeTxRequest[cacheKey] = undefined;
       }
     }
   }))
