@@ -119,7 +119,7 @@ async function findTriggerOrderCandidates(
   }
 
   perpTriggerOrderQueue.splice(0, perpTriggerOrderQueue.length, ...queue);
-  console.log(`Observing ${queue.length} perp orders triggers`);
+  //console.log(`Observing ${queue.length} perp orders triggers`);
 }
 
 /**
@@ -394,10 +394,6 @@ async function main() {
       return
     }
     if (e.type != "optimisticConfirmation") {
-      return
-    }
-
-    if (e.slot % 2 == 0) {
       return
     }
 
