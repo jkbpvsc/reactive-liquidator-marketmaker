@@ -224,8 +224,6 @@ async function processTriggerOrderQueue(
         );
       } catch (e) {
         console.error(e)
-      } finally {
-        activeTxRequest[cacheKey] = undefined;
       }
     }
   }))
@@ -267,8 +265,6 @@ async function checkSuspiciousAccounts(
         );
       } catch (e) {
         console.error(e)
-      } finally {
-        activeTxRequest[cacheKey] = undefined;
       }
     }
   }))
@@ -376,9 +372,9 @@ async function main() {
   await refreshAccounts()
 
   connection.onSlotUpdate(async (e: SlotUpdate) => {
-    if (e.slot % 2 == 0) {
-      return
-    }
+    // if (e.slot % 2 == 0) {
+    //   return
+    // }
     if (poorMansSemaphore.refreshing) {
       // console.log('Accounts being updated, ignoring slot update');
       return
