@@ -20,15 +20,16 @@ import {
   ONE_I80F48,
   MangoClient,
   sleep,
-  ZERO_I80F48,
+  ZERO_I80F48, PerpTriggerOrder,
 } from '@blockworks-foundation/mango-client';
-import { Account, Commitment, Connection, PublicKey } from '@solana/web3.js';
+import {Account, Commitment, Connection, PublicKey, SlotUpdate} from '@solana/web3.js';
 import { Market, OpenOrders } from '@project-serum/serum';
 import BN from 'bn.js';
 import { Orderbook } from '@project-serum/serum/lib/market';
 import axios from 'axios';
 import * as Env from 'dotenv';
 import envExpand from 'dotenv-expand';
+import { SpotMarketInfo } from '../node_modules/@blockworks-foundation/mango-client/lib/src/layout';
 
 envExpand(Env.config());
 
@@ -61,10 +62,10 @@ const mangoGroupKey = groupIds.publicKey;
 const payer = new Account(
   JSON.parse(
     process.env.PRIVATE_KEY ||
-      fs.readFileSync(
-        process.env.KEYPAIR || os.homedir() + '/.config/solana/id.json',
-        'utf-8',
-      ),
+    fs.readFileSync(
+      process.env.KEYPAIR || os.homedir() + '/.config/solana/id.json',
+      'utf-8',
+    ),
   ),
 );
 console.log(`Payer: ${payer.publicKey.toBase58()}`);
@@ -77,6 +78,46 @@ const client = new MangoClient(connection, mangoProgramId);
 
 let mangoSubscriptionId = -1;
 let dexSubscriptionId = -1;
+
+type PerpTriggerElement = { mangoAccount: MangoAccount, order: PerpTriggerOrder, index: number };
+
+async function findTriggerOrderCandidates(
+  mangoGroup: MangoGroup,
+  cache: MangoCache,
+  perpMarkets: PerpMarket[],
+  mangoAccounts: MangoAccount[],
+  perpTriggerOrderQueue: PerpTriggerElement[],
+) {
+  const mangoAccountsWithAOs = mangoAccounts.filter(
+      (ma) => ma.advancedOrdersKey && !ma.advancedOrdersKey.equals(zeroKey),
+  );
+  const allAOs = mangoAccountsWithAOs.map((ma) => ma.advancedOrdersKey);
+  const advancedOrders = await getMultipleAccounts(connection, allAOs);
+
+  let queue: PerpTriggerElement[] = []
+
+  mangoAccountsWithAOs.forEach((ma, i) => {
+    const decoded = AdvancedOrdersLayout.decode(
+        advancedOrders[i].accountInfo.data,
+    );
+    ma.advancedOrders = decoded.orders;
+  });
+
+  for (let mangoAccount of mangoAccountsWithAOs) {
+    for (let i = 0; i < mangoAccount.advancedOrders.length; i++) {
+      const order = mangoAccount.advancedOrders[i];
+
+      if (!(order.perpTrigger && order.perpTrigger.isActive)) {
+        continue;
+      }
+
+      queue.push({ mangoAccount, order: order.perpTrigger, index: i })
+    }
+  }
+
+  perpTriggerOrderQueue.splice(0, perpTriggerOrderQueue.length, ...queue);
+  console.log(`Perp trigger candidate queue length`, queue.length);
+}
 
 /**
  * Process trigger orders for one mango account
@@ -123,6 +164,77 @@ async function processTriggerOrders(
   }
 }
 
+async function processTriggerOrderQueue(
+    mangoGroup: MangoGroup,
+    cache: MangoCache,
+    perpMarkets: PerpMarket[],
+    perpTriggerOrderQueue: PerpTriggerElement[],
+) {
+  await Promise.all(perpTriggerOrderQueue.map(async (queueElement: PerpTriggerElement) => {
+    if (!groupIds) {
+      throw new Error(`Group ${groupName} not found`);
+    }
+
+    let { order, mangoAccount } = queueElement;
+
+    const trigger = order;
+    const currentPrice = cache.priceCache[trigger.marketIndex].price;
+    const configMarketIndex = groupIds.perpMarkets.findIndex(
+        (pm) => pm.marketIndex === trigger.marketIndex,
+    );
+    if (
+        (trigger.triggerCondition == 'above' &&
+            currentPrice.gt(trigger.triggerPrice)) ||
+        (trigger.triggerCondition == 'below' &&
+            currentPrice.lt(trigger.triggerPrice))
+    ) {
+      console.log(
+          `Executing order for account ${mangoAccount.publicKey.toBase58()}`,
+      );
+      await client.executePerpTriggerOrder(
+          mangoGroup,
+          mangoAccount,
+          cache,
+          perpMarkets[configMarketIndex],
+          payer,
+          queueElement.index,
+      );
+    }
+  }))
+}
+
+async function checkSuspiciousAccounts(
+  mangoAccounts: MangoAccount[], 
+  mangoGroup: MangoGroup, 
+  cache: MangoCache,
+  spotMarkets: any[],
+  rootBanks: (RootBank | undefined)[],
+  perpMarkets: PerpMarket[],
+  liqorMangoAccount: MangoAccount,
+) {
+  await Promise.all(mangoAccounts.map(async (account) => {
+
+    if (account.isLiquidatable(mangoGroup, cache)) {
+      await account.reload(connection, mangoGroup.dexProgramId);
+
+      if (!account.isLiquidatable(mangoGroup, cache)) {
+        console.log(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
+        return
+      }
+
+      await liquidateAccount(
+        mangoGroup,
+        cache,
+        spotMarkets,
+        rootBanks,
+        perpMarkets,
+        account,
+        liqorMangoAccount,
+      );
+    }
+  }))
+}
+
 async function main() {
   if (!groupIds) {
     throw new Error(`Group ${groupName} not found`);
@@ -161,8 +273,44 @@ async function main() {
 
   console.log(`Liqor Public Key: ${liqorMangoAccount.publicKey.toBase58()}`);
   let mangoAccounts: MangoAccount[] = [];
-  await refreshAccounts(mangoGroup, mangoAccounts);
-  watchAccounts(groupIds.mangoProgramId, mangoGroup, mangoAccounts);
+  let susMangoAccounts: MangoAccount[] = [];
+  let triggerCandidates: PerpTriggerElement[] = [];
+  let poorMansSemaphore = { refreshing: false };
+
+  //await refreshAccounts(mangoGroup, mangoAccounts, susMangoAccounts, cache, poorMansSemaphore);
+
+  const refreshAccounts = async () => {
+    poorMansSemaphore.refreshing = true;
+    try {
+      console.log('Refreshing accounts...');
+      console.time('getAllMangoAccounts');
+      mangoAccounts.splice(0, mangoAccounts.length, ...(await client.getAllMangoAccounts(
+          mangoGroup,
+          undefined,
+          true,
+      )));
+      setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
+      await findTriggerOrderCandidates(mangoGroup, cache, perpMarkets, mangoAccounts, triggerCandidates);
+      console.timeEnd('getAllMangoAccounts');
+      console.log(`Fetched ${mangoAccounts.length} accounts`);
+    } catch (err) {
+      console.error('Error reloading accounts', err);
+    } finally {
+      poorMansSemaphore.refreshing = false;
+    }
+  }
+
+  setInterval(refreshAccounts, refreshAccountsInterval)
+
+  // Reload Cache
+  setInterval(async () => {
+    [cache, liqorMangoAccount] = await Promise.all([
+      mangoGroup.loadCache(connection),
+      liqorMangoAccount.reload(connection),
+    ]);
+  }, interval);
+
+  // watchAccounts(groupIds.mangoProgramId, mangoGroup, mangoAccounts);
   const perpMarkets = await Promise.all(
     groupIds.perpMarkets.map((perpMarket) => {
       return mangoGroup.loadPerpMarket(
@@ -183,129 +331,161 @@ async function main() {
       );
     }),
   );
+
   const rootBanks = await mangoGroup.loadRootBanks(connection);
   notify(`V3 Liquidator launched for group ${groupName}`);
 
-  // eslint-disable-next-line
-  while (true) {
-    try {
-      if (checkTriggers) {
-        // load all the advancedOrders accounts
-        const mangoAccountsWithAOs = mangoAccounts.filter(
-          (ma) => ma.advancedOrdersKey && !ma.advancedOrdersKey.equals(zeroKey),
-        );
-        const allAOs = mangoAccountsWithAOs.map((ma) => ma.advancedOrdersKey);
+  await refreshAccounts()
 
-        const advancedOrders = await getMultipleAccounts(connection, allAOs);
-        [cache, liqorMangoAccount] = await Promise.all([
-          mangoGroup.loadCache(connection),
-          liqorMangoAccount.reload(connection),
-        ]);
-
-        mangoAccountsWithAOs.forEach((ma, i) => {
-          const decoded = AdvancedOrdersLayout.decode(
-            advancedOrders[i].accountInfo.data,
-          );
-          ma.advancedOrders = decoded.orders;
-        });
-      } else {
-        [cache, liqorMangoAccount] = await Promise.all([
-          mangoGroup.loadCache(connection),
-          liqorMangoAccount.reload(connection),
-        ]);
-      }
-
-      for (const mangoAccount of mangoAccounts) {
-        const mangoAccountKeyString = mangoAccount.publicKey.toBase58();
-
-        // Handle trigger orders for this mango account
-        if (checkTriggers && mangoAccount.advancedOrders) {
-          try {
-            await processTriggerOrders(
-              mangoGroup,
-              cache,
-              perpMarkets,
-              mangoAccount,
-            );
-          } catch (err) {
-            console.error(
-              `Failed to execute trigger order for ${mangoAccountKeyString}`,
-              err,
-            );
-          }
-        }
-
-        // If not liquidatable continue to next mango account
-        if (!mangoAccount.isLiquidatable(mangoGroup, cache)) {
-          continue;
-        }
-
-        // Reload mango account to make sure still liquidatable
-        await mangoAccount.reload(connection, mangoGroup.dexProgramId);
-        if (!mangoAccount.isLiquidatable(mangoGroup, cache)) {
-          console.log(
-            `Account ${mangoAccountKeyString} no longer liquidatable`,
-          );
-          continue;
-        }
-
-        const health = mangoAccount.getHealthRatio(mangoGroup, cache, 'Maint');
-        console.log(
-          `Sick account ${mangoAccountKeyString} health ratio: ${health.toString()}`,
-        );
-        notify(
-          `Sick account ${mangoAccountKeyString} health ratio: ${health.toString()}`,
-        );
-        console.log(mangoAccount.toPrettyString(groupIds, mangoGroup, cache));
-        try {
-          await liquidateAccount(
-            mangoGroup,
-            cache,
-            spotMarkets,
-            rootBanks,
-            perpMarkets,
-            mangoAccount,
-            liqorMangoAccount,
-          );
-
-          console.log('Liquidated account', mangoAccountKeyString);
-          notify(`Liquidated account ${mangoAccountKeyString}`);
-        } catch (err) {
-          console.error(
-            'Failed to liquidate account',
-            mangoAccountKeyString,
-            err,
-          );
-          notify(
-            `Failed to liquidate account ${mangoAccountKeyString}: ${err}`,
-          );
-        } finally {
-          await balanceAccount(
-            mangoGroup,
-            liqorMangoAccount,
-            cache,
-            spotMarkets,
-            perpMarkets,
-          );
-        }
-      }
-
-      cache = await mangoGroup.loadCache(connection);
-      liqorMangoAccount.reload(connection, mangoGroup.dexProgramId);
-
-      // Check need to rebalance again after checking accounts
-      await balanceAccount(
-        mangoGroup,
-        liqorMangoAccount,
-        cache,
-        spotMarkets,
-        perpMarkets,
-      );
-      await sleep(interval);
-    } catch (err) {
-      console.error('Error checking accounts:', err);
+  connection.onSlotUpdate(async (e: SlotUpdate) => {
+    if (e.slot % 2 == 0) {
+      return
     }
-  }
+    if (poorMansSemaphore.refreshing) {
+      console.log('Accounts being updated, ignoring slot update');
+      return
+    }
+    if (e.type != "optimisticConfirmation") {
+      return
+    }
+
+    console.log(`Handling slot ${e.slot}`);
+    console.time(`onSlotUpdate ${e.slot}`);
+    cache = await mangoGroup.loadCache(connection)
+    await Promise.all(
+        [
+          await processTriggerOrderQueue(mangoGroup, cache, perpMarkets, triggerCandidates),
+          await checkSuspiciousAccounts(susMangoAccounts, mangoGroup, cache, spotMarkets, rootBanks, perpMarkets, liqorMangoAccount)
+        ]
+    )
+    console.timeEnd(`onSlotUpdate ${e.slot}`)
+  });
+
+  //eslint-disable-next-line
+  // while (false) {
+  //   try {
+  //     if (checkTriggers) {
+  //       // load all the advancedOrders accounts
+  //       console.time('checkTriggers');
+  //       const mangoAccountsWithAOs = mangoAccounts.filter(
+  //         (ma) => ma.advancedOrdersKey && !ma.advancedOrdersKey.equals(zeroKey),
+  //       );
+  //       const allAOs = mangoAccountsWithAOs.map((ma) => ma.advancedOrdersKey);
+  //
+  //       const advancedOrders = await getMultipleAccounts(connection, allAOs);
+  //       [cache, liqorMangoAccount] = await Promise.all([
+  //         mangoGroup.loadCache(connection),
+  //         liqorMangoAccount.reload(connection),
+  //       ]);
+  //
+  //       mangoAccountsWithAOs.forEach((ma, i) => {
+  //         const decoded = AdvancedOrdersLayout.decode(
+  //           advancedOrders[i].accountInfo.data,
+  //         );
+  //         ma.advancedOrders = decoded.orders;
+  //       });
+  //       console.timeEnd('checkTriggers');
+  //     } else {
+  //       [cache, liqorMangoAccount] = await Promise.all([
+  //         mangoGroup.loadCache(connection),
+  //         liqorMangoAccount.reload(connection),
+  //       ]);
+  //     }
+  //
+  //     console.log(`Checking ${mangoAccounts.length} accounts`)
+  //     console.time('Checking all accounts');
+  //
+  //     await Promise.all(mangoAccounts.map(async (mangoAccount) => {
+  //       const mangoAccountKeyString = mangoAccount.publicKey.toBase58();
+  //
+  //       // Handle trigger orders for this mango account
+  //       if (checkTriggers && mangoAccount.advancedOrders) {
+  //         try {
+  //           await processTriggerOrders(
+  //             mangoGroup,
+  //             cache,
+  //             perpMarkets,
+  //             mangoAccount,
+  //           );
+  //         } catch (err) {
+  //           console.error(
+  //             `Failed to execute trigger order for ${mangoAccountKeyString}`,
+  //             err,
+  //           );
+  //         }
+  //       }
+  //
+  //       // If not liquidatable continue to next mango account
+  //       if (!mangoAccount.isLiquidatable(mangoGroup, cache)) {
+  //         return;
+  //       }
+  //
+  //       // Reload mango account to make sure still liquidatable
+  //       await mangoAccount.reload(connection, mangoGroup.dexProgramId);
+  //       if (!mangoAccount.isLiquidatable(mangoGroup, cache)) {
+  //         console.log(
+  //           `Account ${mangoAccountKeyString} no longer liquidatable`,
+  //         );
+  //         return;
+  //       }
+  //
+  //       const health = mangoAccount.getHealthRatio(mangoGroup, cache, 'Maint');
+  //       console.log(
+  //         `Sick account ${mangoAccountKeyString} health ratio: ${health.toString()}`,
+  //       );
+  //       notify(
+  //         `Sick account ${mangoAccountKeyString} health ratio: ${health.toString()}`,
+  //       );
+  //       console.log(mangoAccount.toPrettyString(groupIds, mangoGroup, cache));
+  //       try {
+  //         await liquidateAccount(
+  //           mangoGroup,
+  //           cache,
+  //           spotMarkets,
+  //           rootBanks,
+  //           perpMarkets,
+  //           mangoAccount,
+  //           liqorMangoAccount,
+  //         );
+  //
+  //         console.log('Liquidated account', mangoAccountKeyString);
+  //         notify(`Liquidated account ${mangoAccountKeyString}`);
+  //       } catch (err) {
+  //         console.error(
+  //           'Failed to liquidate account',
+  //           mangoAccountKeyString,
+  //           err,
+  //         );
+  //         notify(
+  //           `Failed to liquidate account ${mangoAccountKeyString}: ${err}`,
+  //         );
+  //       } finally {
+  //         await balanceAccount(
+  //           mangoGroup,
+  //           liqorMangoAccount,
+  //           cache,
+  //           spotMarkets,
+  //           perpMarkets,
+  //         );
+  //       }
+  //     }
+  //
+  //     cache = await mangoGroup.loadCache(connection);
+  //     liqorMangoAccount.reload(connection, mangoGroup.dexProgramId);
+  //
+  //     // Check need to rebalance again after checking accounts
+  //     await balanceAccount(
+  //       mangoGroup,
+  //       liqorMangoAccount,
+  //       cache,
+  //       spotMarkets,
+  //       perpMarkets,
+  //     );
+  //     await sleep(interval);
+  //   } catch (err) {
+  //     console.error('Error checking accounts:', err);
+  //   }
+  // }
 }
 
 function watchAccounts(
@@ -410,10 +590,30 @@ function watchAccounts(
   }
 }
 
+function setSuspiciousAccounts(
+  suspiciousAccounts: MangoAccount[],
+  mangoAccounts: MangoAccount[],
+  mangoGroup: MangoGroup,
+  cache: MangoCache
+) {
+  const susBatchSize = process.env.SUS_ACC_BATCH_SIZE ? Number.parseInt(process.env.SUS_ACC_BATCH_SIZE) : 30;
+  const susAccounts = mangoAccounts
+    .map(a => ({ account: a, health: a.getHealthRatio(mangoGroup, cache, 'Maint').toNumber() }))
+    .sort((a, b) => a.health - b.health)
+    .map(a => a.account);
+
+  let worstAccounts = susAccounts.splice(0, susBatchSize);
+  suspiciousAccounts.splice(0, susAccounts.length, ...worstAccounts);
+}
+
 async function refreshAccounts(
   mangoGroup: MangoGroup,
   mangoAccounts: MangoAccount[],
+  suspiciousAccounts: MangoAccount[],
+  cache: MangoCache,
+  poorMansSemaphore: { refreshing: boolean }
 ) {
+  poorMansSemaphore.refreshing = true;
   try {
     console.log('Refreshing accounts...');
     console.time('getAllMangoAccounts');
@@ -422,16 +622,20 @@ async function refreshAccounts(
       undefined,
       true,
     )));
+    setSuspiciousAccounts(suspiciousAccounts, mangoAccounts, mangoGroup, cache);
     console.timeEnd('getAllMangoAccounts');
     console.log(`Fetched ${mangoAccounts.length} accounts`);
   } catch (err) {
     console.error('Error reloading accounts', err);
   } finally {
+    poorMansSemaphore.refreshing = false;
     setTimeout(
       refreshAccounts,
       refreshAccountsInterval,
       mangoGroup,
       mangoAccounts,
+      cache,
+      poorMansSemaphore
     );
   }
 }
@@ -445,55 +649,57 @@ async function liquidateAccount(
   liqee: MangoAccount,
   liqor: MangoAccount,
 ) {
-  const hasPerpOpenOrders = liqee.perpAccounts.some(
-    (pa) => pa.bidsQuantity.gt(ZERO_BN) || pa.asksQuantity.gt(ZERO_BN),
-  );
-
-  if (hasPerpOpenOrders) {
-    console.log('forceCancelPerpOrders');
-    await Promise.all(
-      perpMarkets.map((perpMarket) => {
-        return client.forceCancelAllPerpOrdersInMarket(
-          mangoGroup,
-          liqee,
-          perpMarket,
-          payer,
-          10,
-        );
-      }),
+  if (!process.env.SKIP_FORCE_CLOSE_ORDERS) {
+    const hasPerpOpenOrders = liqee.perpAccounts.some(
+      (pa) => pa.bidsQuantity.gt(ZERO_BN) || pa.asksQuantity.gt(ZERO_BN),
     );
-    await sleep(interval * 2);
-  }
-  await liqee.reload(connection, mangoGroup.dexProgramId);
-  if (!liqee.isLiquidatable(mangoGroup, cache)) {
-    throw new Error('Account no longer liquidatable');
-  }
 
-  while (liqee.hasAnySpotOrders()) {
-    for (let i = 0; i < mangoGroup.spotMarkets.length; i++) {
-      const spotMarket = spotMarkets[i];
-      const baseRootBank = rootBanks[i];
-      const quoteRootBank = rootBanks[QUOTE_INDEX];
-
-      if (baseRootBank && quoteRootBank) {
-        if (liqee.inMarginBasket[i]) {
-          console.log('forceCancelOrders ', i);
-          await client.forceCancelSpotOrders(
+    if (hasPerpOpenOrders) {
+      console.log('forceCancelPerpOrders');
+      await Promise.all(
+        perpMarkets.map((perpMarket) => {
+          return client.forceCancelAllPerpOrdersInMarket(
             mangoGroup,
             liqee,
-            spotMarket,
-            baseRootBank,
-            quoteRootBank,
+            perpMarket,
             payer,
-            new BN(5),
+            10,
           );
-        }
-      }
+        }),
+      );
+      await sleep(interval * 2);
     }
-
     await liqee.reload(connection, mangoGroup.dexProgramId);
     if (!liqee.isLiquidatable(mangoGroup, cache)) {
       throw new Error('Account no longer liquidatable');
+    }
+
+    while (liqee.hasAnySpotOrders()) {
+      for (let i = 0; i < mangoGroup.spotMarkets.length; i++) {
+        const spotMarket = spotMarkets[i];
+        const baseRootBank = rootBanks[i];
+        const quoteRootBank = rootBanks[QUOTE_INDEX];
+
+        if (baseRootBank && quoteRootBank) {
+          if (liqee.inMarginBasket[i]) {
+            console.log('forceCancelOrders ', i);
+            await client.forceCancelSpotOrders(
+              mangoGroup,
+              liqee,
+              spotMarket,
+              baseRootBank,
+              quoteRootBank,
+              payer,
+              new BN(5),
+            );
+          }
+        }
+      }
+
+      await liqee.reload(connection, mangoGroup.dexProgramId);
+      if (!liqee.isLiquidatable(mangoGroup, cache)) {
+        throw new Error('Account no longer liquidatable');
+      }
     }
   }
 
@@ -523,28 +729,58 @@ async function liquidateAccount(
     maintHealths.perp.lt(ZERO_I80F48) ||
     (initHealths.perp.lt(ZERO_I80F48) && liqee.beingLiquidated);
 
-  if (shouldLiquidateSpot) {
-    await liquidateSpot(
-      mangoGroup,
-      cache,
-      spotMarkets,
-      perpMarkets,
-      rootBanks,
-      liqee,
-      liqor,
-    );
-  }
+  await Promise.all(
+    [
+      (async () => {
+        if (shouldLiquidateSpot) {
+          await liquidateSpot(
+            mangoGroup,
+            cache,
+            spotMarkets,
+            perpMarkets,
+            rootBanks,
+            liqee,
+            liqor,
+          );
+        }
+      }),
+      (async () => {
+        if (shouldLiquidatePerps) {
+          await liquidatePerps(
+            mangoGroup,
+            cache,
+            perpMarkets,
+            rootBanks,
+            liqee,
+            liqor,
+          );
+        }
+      })
+    ]
+  )
 
-  if (shouldLiquidatePerps) {
-    await liquidatePerps(
-      mangoGroup,
-      cache,
-      perpMarkets,
-      rootBanks,
-      liqee,
-      liqor,
-    );
-  }
+  // if (shouldLiquidateSpot) {
+  //   await liquidateSpot(
+  //     mangoGroup,
+  //     cache,
+  //     spotMarkets,
+  //     perpMarkets,
+  //     rootBanks,
+  //     liqee,
+  //     liqor,
+  //   );
+  // }
+
+  // if (shouldLiquidatePerps) {
+  //   await liquidatePerps(
+  //     mangoGroup,
+  //     cache,
+  //     perpMarkets,
+  //     rootBanks,
+  //     liqee,
+  //     liqor,
+  //   );
+  // }
 
   if (
     !shouldLiquidateSpot &&
@@ -1130,12 +1366,12 @@ async function closePositions(
 
           console.log(
             side +
-              'ing ' +
-              basePositionSize +
-              ' of perp ' +
-              i +
-              ' for $' +
-              orderPrice,
+            'ing ' +
+            basePositionSize +
+            ' of perp ' +
+            i +
+            ' for $' +
+            orderPrice,
           );
           await client.placePerpOrder(
             mangoGroup,
