@@ -41,7 +41,7 @@ async function testPerpLiquidationAndBankruptcy() {
 
   const client = new MangoClient(connection, groupIds.mangoProgramId);
   const mangoGroup = await client.getMangoGroup(groupIds.publicKey);
-  console.log(mangoGroup.admin.toBase58());
+  debug(mangoGroup.admin.toBase58());
   const perpMarkets = await Promise.all(
     groupIds.perpMarkets.map((perpMarket) => {
       return mangoGroup.loadPerpMarket(
@@ -72,14 +72,14 @@ async function testPerpLiquidationAndBankruptcy() {
     },
   });
   // keeper.stdout.on('data', (data) => {
-  //   console.log(`keeper stdout: ${data}`);
+  //   debug(`keeper stdout: ${data}`);
   // });
   keeper.stderr.on('data', (data) => {
     console.error(`keeper stderr: ${data}`);
   });
 
   keeper.on('close', (code) => {
-    console.log(`keeper exited with code ${code}`);
+    debug(`keeper exited with code ${code}`);
   });
 
   // Run crank
@@ -96,7 +96,7 @@ async function testPerpLiquidationAndBankruptcy() {
   });
 
   crank.on('close', (code) => {
-    console.log(`crank exited with code ${code}`);
+    debug(`crank exited with code ${code}`);
   });
 
   let cache = await mangoGroup.loadCache(connection);
@@ -132,21 +132,21 @@ async function testPerpLiquidationAndBankruptcy() {
     liqorPk,
     mangoGroup.dexProgramId,
   );
-  console.log('Created Liqor:', liqorPk.toBase58());
+  debug('Created Liqor:', liqorPk.toBase58());
 
   const liqeePk = await client.initMangoAccount(mangoGroup, payer);
   const liqeeAccount = await client.getMangoAccount(
     liqeePk,
     mangoGroup.dexProgramId,
   );
-  console.log('Created Liqee:', liqeePk.toBase58());
+  debug('Created Liqee:', liqeePk.toBase58());
 
   const makerPk = await client.initMangoAccount(mangoGroup, payer);
   const makerAccount = await client.getMangoAccount(
     makerPk,
     mangoGroup.dexProgramId,
   );
-  console.log('Created Maker:', liqorPk.toBase58());
+  debug('Created Maker:', liqorPk.toBase58());
 
   await client.setStubOracle(
     mangoGroup.publicKey,
@@ -156,7 +156,7 @@ async function testPerpLiquidationAndBankruptcy() {
   );
 
   // await runKeeper();
-  console.log('Depositing for liqor');
+  debug('Depositing for liqor');
   await client.deposit(
     mangoGroup,
     liqorAccount,
@@ -167,7 +167,7 @@ async function testPerpLiquidationAndBankruptcy() {
     quoteWallet.address,
     100000,
   );
-  console.log('Depositing for liqee');
+  debug('Depositing for liqee');
   await client.deposit(
     mangoGroup,
     liqeeAccount,
@@ -178,7 +178,7 @@ async function testPerpLiquidationAndBankruptcy() {
     btcWallet.address,
     1,
   );
-  console.log('Depositing for maker');
+  debug('Depositing for maker');
   await client.deposit(
     mangoGroup,
     makerAccount,
@@ -192,7 +192,7 @@ async function testPerpLiquidationAndBankruptcy() {
 
   // await runKeeper();
 
-  console.log('Placing maker orders');
+  debug('Placing maker orders');
   await client.placePerpOrder(
     mangoGroup,
     makerAccount,
@@ -228,7 +228,7 @@ async function testPerpLiquidationAndBankruptcy() {
     'postOnly',
   );
 
-  console.log('Placing taker order');
+  debug('Placing taker order');
   await client.placePerpOrder(
     mangoGroup,
     liqeeAccount,
@@ -245,19 +245,19 @@ async function testPerpLiquidationAndBankruptcy() {
   await liqeeAccount.reload(connection);
   await liqorAccount.reload(connection);
 
-  console.log(
+  debug(
     'Liqor base',
     liqorAccount.perpAccounts[1].basePosition.toString(),
   );
-  console.log(
+  debug(
     'Liqor quote',
     liqorAccount.perpAccounts[1].quotePosition.toString(),
   );
-  console.log(
+  debug(
     'Liqee base',
     liqeeAccount.perpAccounts[1].basePosition.toString(),
   );
-  console.log(
+  debug(
     'Liqee quote',
     liqeeAccount.perpAccounts[1].quotePosition.toString(),
   );
@@ -273,11 +273,11 @@ async function testPerpLiquidationAndBankruptcy() {
   await liqeeAccount.reload(connection);
   await liqorAccount.reload(connection);
 
-  console.log(
+  debug(
     'Liqee Maint Health',
     liqeeAccount.getHealthRatio(mangoGroup, cache, 'Maint').toString(),
   );
-  console.log(
+  debug(
     'Liqor Maint Health',
     liqorAccount.getHealthRatio(mangoGroup, cache, 'Maint').toString(),
   );
@@ -294,7 +294,7 @@ async function testPerpLiquidationAndBankruptcy() {
   });
 
   liquidator.stdout.on('data', (data) => {
-    console.log(`Liquidator stdout: ${data}`);
+    debug(`Liquidator stdout: ${data}`);
   });
 
   liquidator.stderr.on('data', (data) => {
@@ -302,7 +302,7 @@ async function testPerpLiquidationAndBankruptcy() {
   });
 
   liquidator.on('close', (code) => {
-    console.log(`Liquidator exited with code ${code}`);
+    debug(`Liquidator exited with code ${code}`);
   });
 
   await sleep(60000);
@@ -311,12 +311,12 @@ async function testPerpLiquidationAndBankruptcy() {
   await liqeeAccount.reload(connection);
   await liqorAccount.reload(connection);
 
-  console.log(
+  debug(
     'Liqee Maint Health',
     liqeeAccount.getHealthRatio(mangoGroup, cache, 'Maint').toString(),
   );
-  console.log('Liqee Bankrupt', liqeeAccount.isBankrupt);
-  console.log(
+  debug('Liqee Bankrupt', liqeeAccount.isBankrupt);
+  debug(
     'Liqor Maint Health',
     liqorAccount.getHealthRatio(mangoGroup, cache, 'Maint').toString(),
   );
