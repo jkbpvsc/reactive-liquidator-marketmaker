@@ -32,6 +32,8 @@ import envExpand from 'dotenv-expand';
 import {SpotMarketInfo} from '../node_modules/@blockworks-foundation/mango-client/lib/src/layout';
 import debugCreator from 'debug';
 
+debugCreator.log = console.info.bind(console);
+
 type PerpTriggerElement = { mangoAccount: MangoAccount, order: PerpTriggerOrder, index: number } | null;
 
 
