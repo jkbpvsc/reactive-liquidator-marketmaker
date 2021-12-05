@@ -90,7 +90,7 @@ const client = new MangoClient(connection, mangoProgramId);
 let mangoSubscriptionId = -1;
 let dexSubscriptionId = -1;
 let cacheChangeSubscriptionId = -1;
-let poorMansSemaphore = {refreshing: false};
+let control = {refreshing: false};
 let mangoAccounts: MangoAccount[] = [];
 let susMangoAccounts: MangoAccount[] = [];
 let triggerCandidates: PerpTriggerElement[] = [];
@@ -162,7 +162,7 @@ async function refreshMangoAccounts(
     perpMarkets: PerpMarket[]
 ) {
     debug('Refreshing Mango Accounts');
-    poorMansSemaphore.refreshing = true;
+    control.refreshing = true;
     try {
         const mangoAccounts = await client.getAllMangoAccounts(mangoGroup, undefined, true);
         setSuspiciousAccounts(susMangoAccounts, mangoAccounts, mangoGroup, cache);
@@ -172,7 +172,7 @@ async function refreshMangoAccounts(
     } catch (err) {
         console.error('Error reloading accounts', err);
     } finally {
-        poorMansSemaphore.refreshing = false;
+        control.refreshing = false;
     }
 
     setTimeout(refreshMangoAccounts, refreshAccountsInterval, mangoGroup, perpMarkets);
@@ -364,7 +364,7 @@ async function liquidatorSetup(): Promise<MangoGroup> {
     return mangoGroup ;
 }
 
-function watchAccounts(
+async function watchAccounts(
     mangoProgramId: PublicKey,
     mangoGroup: MangoGroup,
     perpMarkets: PerpMarket[],
@@ -374,7 +374,6 @@ function watchAccounts(
     const debug = debugCreator('liquidator:websocket');
     try {
         debug('Connecting WebSocket')
-        //debug('Watching accounts...');
         const openOrdersAccountSpan = OpenOrders.getLayout(
             mangoGroup.dexProgramId,
         ).span;
@@ -383,13 +382,13 @@ function watchAccounts(
         ).offsetOf('owner');
 
         if (mangoSubscriptionId != -1) {
-            connection.removeProgramAccountChangeListener(mangoSubscriptionId);
+            await connection.removeProgramAccountChangeListener(mangoSubscriptionId);
         }
         if (dexSubscriptionId != -1) {
-            connection.removeProgramAccountChangeListener(dexSubscriptionId);
+            await connection.removeProgramAccountChangeListener(dexSubscriptionId);
         }
         if (cacheChangeSubscriptionId != -1) {
-            connection.removeAccountChangeListener(cacheChangeSubscriptionId);
+            await connection.removeAccountChangeListener(cacheChangeSubscriptionId);
         }
 
         cacheChangeSubscriptionId = connection.onAccountChange(
@@ -400,7 +399,7 @@ function watchAccounts(
                 cache = MangoCacheLayout.decode(accountInfo.data)
                 cache.publicKey = cachePk;
 
-                if (poorMansSemaphore.refreshing) {
+                if (control.refreshing) {
                     return
                 }
                 await Promise.all(
@@ -454,7 +453,7 @@ function watchAccounts(
                         if (!(order.perpTrigger && order.perpTrigger.isActive)) {
                             continue;
                         }
-                        const index = triggerCandidates.findIndex((trigger) => trigger!.index === i && trigger!.mangoAccount.publicKey.equals(mangoAccount.publicKey))
+                        const index = triggerCandidates.findIndex((trigger) => !!trigger && trigger.index === i && trigger.mangoAccount.publicKey.equals(mangoAccount.publicKey))
                         if (index === -1) {
                             debug('New AdvancedOrder', mangoAccount.publicKey.toString(), 'index', i, 'for MangoAccount', mangoAccount.publicKey.toString());
                             triggerCandidates.push({ mangoAccount, index: i, order: mangoAccount.advancedOrders[i].perpTrigger!})
