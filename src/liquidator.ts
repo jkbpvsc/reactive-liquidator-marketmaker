@@ -441,7 +441,6 @@ async function watchAccounts(
                     }
                 }
 
-
                 // Track open order triggers
                 if (!mangoAccount.advancedOrdersKey.equals(zeroKey)) {
                     const debug = debugCreator('liquidator:sub:mango:advancedOrders')
