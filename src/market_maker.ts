@@ -27,91 +27,26 @@ import {
 } from '@blockworks-foundation/mango-client';
 import {OpenOrders} from '@project-serum/serum';
 import path from 'path';
+import {MM_PARAMS} from "./config";
+import {BotContext} from "./john-wayne";
 
-const paramsFileName = process.env.PARAMS || 'default.json';
-const params = JSON.parse(
-    fs.readFileSync(
-        path.resolve(__dirname, `../params/${paramsFileName}`),
-        'utf-8',
-    ),
-);
-
-const payer = new Account(
-    JSON.parse(
-        fs.readFileSync(
-            process.env.KEYPAIR || os.homedir() + '/.config/solana/id.json',
-            'utf-8',
-        ),
-    ),
-);
-
-const config = new Config(IDS);
-
-const groupIds = config.getGroupWithName(params.group) as GroupConfig;
-if (!groupIds) {
-    throw new Error(`Group ${params.group} not found`);
-}
-const cluster = groupIds.cluster as Cluster;
-const mangoProgramId = groupIds.mangoProgramId;
-const mangoGroupKey = groupIds.publicKey;
-
-const control = {isRunning: true, interval: params.interval};
-
-type MarketContext = {
-    marketName: string;
-    params: any;
-    config: PerpMarketConfig;
-    market: PerpMarket;
-    marketIndex: number;
-    bids: BookSide;
-    asks: BookSide;
-};
-
-interface AccountContext {
-    connection: Connection,
-    client: MangoClient,
-    group: MangoGroup,
-    account: MangoAccount,
+export function startSmoking(ctx: BotContext) {
+    if (control.isRunning) {
+        fullMarketMaker(ctx).finally(() => startSmoking(ctx));
+    }
 }
 
-async function fullMarketMaker(
-
-) {
-    const connection = new Connection(
-        process.env.ENDPOINT_URL || config.cluster_urls[cluster],
-        'processed' as Commitment,
-    );
-    const client = new MangoClient(connection, mangoProgramId);
-
-    // load group
-    const mangoGroup = await client.getMangoGroup(mangoGroupKey);
+async function fullMarketMaker(ctx: BotContext) {
+    const connection = ctx.connection;
+    const client = ctx.client;
 
     // load mangoAccount
-    let mangoAccount: MangoAccount;
-    if (params.mangoAccountName) {
-        mangoAccount = await loadMangoAccountWithName(
-            client,
-            mangoGroup,
-            payer,
-            params.mangoAccountName,
-        );
-    } else if (params.mangoAccountPubkey) {
-        mangoAccount = await loadMangoAccountWithPubkey(
-            client,
-            mangoGroup,
-            payer,
-            new PublicKey(params.mangoAccountPubkey),
-        );
-    } else {
-        throw new Error(
-            'Please add mangoAccountName or mangoAccountPubkey to params file',
-        );
-    }
+    let mangoAccount: MangoAccount = ctx.account;
 
     const marketContexts: MarketContext[] = [];
-    for (const baseSymbol in params.assets) {
+    for (const baseSymbol in MM_PARAMS.assets) {
         const perpMarketConfig = getPerpMarketByBaseSymbol(
-            groupIds,
+            ctx.groupConfig,
             baseSymbol,
         ) as PerpMarketConfig;
         const perpMarket = await client.getPerpMarket(
@@ -121,7 +56,7 @@ async function fullMarketMaker(
         );
         marketContexts.push({
             marketName: perpMarketConfig.name,
-            params: params.assets[baseSymbol].perp,
+            params: MM_PARAMS.assets[baseSymbol].perp,
             config: perpMarketConfig,
             market: perpMarket,
             marketIndex: perpMarketConfig.marketIndex,
@@ -133,15 +68,13 @@ async function fullMarketMaker(
     process.on('SIGINT', function () {
         console.log('Caught keyboard interrupt. Canceling orders');
         control.isRunning = false;
-        onExit(client, payer, mangoGroup, mangoAccount, marketContexts);
+        onExit(ctx, marketContexts);
     });
 
     while (control.isRunning) {
         try {
             const state = await loadAccountAndMarketState(
-                connection,
-                mangoGroup,
-                mangoAccount,
+                ctx,
                 marketContexts,
             );
             mangoAccount = state.mangoAccount;
@@ -151,24 +84,22 @@ async function fullMarketMaker(
             const txProms: any[] = [];
             for (let i = 0; i < marketContexts.length; i++) {
                 const instrSet = makeMarketUpdateInstructions(
-                    mangoGroup,
-                    state.cache,
-                    mangoAccount,
+                    ctx,
                     marketContexts[i],
                 );
 
                 if (instrSet.length > 0) {
                     instrSet.forEach((ix) => tx.add(ix));
                     j++;
-                    if (j === params.batch) {
-                        txProms.push(client.sendTransaction(tx, payer, []));
+                    if (j === MM_PARAMS.batch) {
+                        txProms.push(client.sendTransaction(tx, ctx.payer, []));
                         tx = new Transaction();
                         j = 0;
                     }
                 }
             }
             if (tx.instructions.length) {
-                txProms.push(client.sendTransaction(tx, payer, []));
+                txProms.push(client.sendTransaction(tx, ctx.payer, []));
             }
             if (txProms.length) {
                 const txids = await Promise.all(txProms);
@@ -185,106 +116,46 @@ async function fullMarketMaker(
     }
 }
 
+const control = {
+    isRunning: true,
+    interval: MM_PARAMS.interval
+};
 
-/**
- * Load MangoCache, MangoAccount and Bids and Asks for all PerpMarkets using only
- * one RPC call.
- */
-async function loadMarketState(
-    connection: Connection,
-    group: MangoGroup,
-    accountContext: AccountContext,
-    marketContexts: MarketContext[],
-): Promise<{
-    cache: MangoCache;
-    marketContexts: MarketContext[];
-}> {
-    const mangoAccount = accountContext.account;
-    const inBasketOpenOrders = mangoAccount
-        .getOpenOrdersKeysInBasket()
-        .filter((pk) => !pk.equals(zeroKey));
-
-    const allAccounts = [
-        group.mangoCache,
-        ...inBasketOpenOrders,
-        ...marketContexts.map((marketContext) => marketContext.market.bids),
-        ...marketContexts.map((marketContext) => marketContext.market.asks),
-    ];
-
-    const accountInfos = await getMultipleAccounts(connection, allAccounts);
-
-    const cache = new MangoCache(
-        accountInfos[0].publicKey,
-        MangoCacheLayout.decode(accountInfos[0].accountInfo.data),
-    );
-
-    const openOrdersAis = accountInfos.slice(1, 1 + inBasketOpenOrders.length);
-    for (let i = 0; i < openOrdersAis.length; i++) {
-        const ai = openOrdersAis[i];
-        const marketIndex = mangoAccount.spotOpenOrders.findIndex((soo) =>
-            soo.equals(ai.publicKey),
-        );
-        mangoAccount.spotOpenOrdersAccounts[marketIndex] =
-            OpenOrders.fromAccountInfo(
-                ai.publicKey,
-                ai.accountInfo,
-                group.dexProgramId,
-            );
-    }
-
-    accountInfos
-        .slice(
-            1 + inBasketOpenOrders.length,
-            1 + inBasketOpenOrders.length + marketContexts.length,
-        )
-        .forEach((ai, i) => {
-            marketContexts[i].bids = new BookSide(
-                ai.publicKey,
-                marketContexts[i].market,
-                BookSideLayout.decode(ai.accountInfo.data),
-            );
-        });
-
-    accountInfos
-        .slice(
-            1 + inBasketOpenOrders.length + marketContexts.length,
-            1 + inBasketOpenOrders.length + 2 * marketContexts.length,
-        )
-        .forEach((ai, i) => {
-            marketContexts[i].asks = new BookSide(
-                ai.publicKey,
-                marketContexts[i].market,
-                BookSideLayout.decode(ai.accountInfo.data),
-            );
-        });
-
-    return {
-        cache,
-        marketContexts,
-    };
-}
+type MarketContext = {
+    marketName: string;
+    params: any;
+    config: PerpMarketConfig;
+    market: PerpMarket;
+    marketIndex: number;
+    bids: BookSide;
+    asks: BookSide;
+};
 
 /**
  * Load MangoCache, MangoAccount and Bids and Asks for all PerpMarkets using only
  * one RPC call.
  */
 async function loadAccountAndMarketState(
-    connection: Connection,
-    group: MangoGroup,
-    oldMangoAccount: MangoAccount,
+    ctx: BotContext,
     marketContexts: MarketContext[],
 ): Promise<{
     cache: MangoCache;
     mangoAccount: MangoAccount;
     marketContexts: MarketContext[];
 }> {
-    const inBasketOpenOrders = oldMangoAccount
+    const {
+        group,
+        account,
+        connection,
+    } = ctx;
+
+    const inBasketOpenOrders = account
         .getOpenOrdersKeysInBasket()
         .filter((pk) => !pk.equals(zeroKey));
 
     const allAccounts = [
         group.mangoCache,
-        //oldMangoAccount.publicKey,
+        account.publicKey,
         ...inBasketOpenOrders,
         ...marketContexts.map((marketContext) => marketContext.market.bids),
         ...marketContexts.map((marketContext) => marketContext.market.asks),
@@ -348,21 +219,28 @@ async function loadAccountAndMarketState(
     };
 }
 
-
 function makeMarketUpdateInstructions(
-    group: MangoGroup,
-    cache: MangoCache,
-    mangoAccount: MangoAccount,
+    ctx: BotContext,
     marketContext: MarketContext,
 ): TransactionInstruction[] {
+
+    const {
+        group,
+        account,
+        cache,
+        payer,
+    } = ctx;
+
+    const mangoProgramId = ctx.groupConfig.mangoProgramId;
+
     // Right now only uses the perp
     const marketIndex = marketContext.marketIndex;
     const market = marketContext.market;
     const bids = marketContext.bids;
     const asks = marketContext.asks;
     const fairValue = group.getPrice(marketIndex, cache).toNumber();
-    const equity = mangoAccount.computeValue(group, cache).toNumber();
-    const perpAccount = mangoAccount.perpAccounts[marketIndex];
+    const equity = account.computeValue(group, cache).toNumber();
+    const perpAccount = account.perpAccounts[marketIndex];
     // TODO look at event queue as well for unprocessed fills
     const basePos = perpAccount.getBasePositionUi(market);
 
@@ -377,7 +255,6 @@ function makeMarketUpdateInstructions(
     const lean = (-leanCoeff * basePos) / size;
     const bidPrice = fairValue * (1 - charge + lean + bias);
     const askPrice = fairValue * (1 + charge + lean + bias);
-    // TODO volatility adjustment
 
     const [modelBidPrice, nativeBidSize] = market.uiToNativePriceQuantity(
         bidPrice,
@@ -400,7 +277,7 @@ function makeMarketUpdateInstructions(
             : modelAskPrice;
 
     // TODO use order book to requote if size has changed
-    const openOrders = mangoAccount
+    const openOrders = account
         .getPerpOpenOrders()
         .filter((o) => o.marketIndex === marketIndex);
     let moveOrders = openOrders.length === 0 || openOrders.length > 2;
@@ -442,14 +319,14 @@ function makeMarketUpdateInstructions(
         const takerSell = makePlacePerpOrderInstruction(
             mangoProgramId,
             group.publicKey,
-            mangoAccount.publicKey,
+            account.publicKey,
             payer.publicKey,
             cache.publicKey,
             market.publicKey,
             market.bids,
             market.asks,
             market.eventQueue,
-            mangoAccount.getOpenOrdersKeysInBasket(),
+            account.getOpenOrdersKeysInBasket(),
             bestBid.priceLots,
             ONE_BN,
             new BN(Date.now()),
@@ -468,14 +345,14 @@ function makeMarketUpdateInstructions(
         const takerBuy = makePlacePerpOrderInstruction(
             mangoProgramId,
             group.publicKey,
-            mangoAccount.publicKey,
+            account.publicKey,
             payer.publicKey,
             cache.publicKey,
             market.publicKey,
             market.bids,
             market.asks,
             market.eventQueue,
-            mangoAccount.getOpenOrdersKeysInBasket(),
+            account.getOpenOrdersKeysInBasket(),
             bestAsk.priceLots,
             ONE_BN,
             new BN(Date.now()),
@@ -489,7 +366,7 @@ function makeMarketUpdateInstructions(
         const cancelAllInstr = makeCancelAllPerpOrdersInstruction(
             mangoProgramId,
             group.publicKey,
-            mangoAccount.publicKey,
+            account.publicKey,
             payer.publicKey,
             market.publicKey,
             market.bids,
@@ -500,14 +377,14 @@ function makeMarketUpdateInstructions(
         const placeBidInstr = makePlacePerpOrderInstruction(
             mangoProgramId,
             group.publicKey,
-            mangoAccount.publicKey,
+            account.publicKey,
             payer.publicKey,
             cache.publicKey,
             market.publicKey,
             market.bids,
             market.asks,
             market.eventQueue,
-            mangoAccount.getOpenOrdersKeysInBasket(),
+            account.getOpenOrdersKeysInBasket(),
             bookAdjBid,
             nativeBidSize,
             new BN(Date.now()),
@@ -518,14 +395,14 @@ function makeMarketUpdateInstructions(
         const placeAskInstr = makePlacePerpOrderInstruction(
             mangoProgramId,
             group.publicKey,
-            mangoAccount.publicKey,
+            account.publicKey,
             payer.publicKey,
             cache.publicKey,
             market.publicKey,
             market.bids,
             market.asks,
             market.eventQueue,
-            mangoAccount.getOpenOrdersKeysInBasket(),
+            account.getOpenOrdersKeysInBasket(),
             bookAdjAsk,
             nativeAskSize,
             new BN(Date.now()),
@@ -545,15 +422,20 @@ function makeMarketUpdateInstructions(
 }
 
 async function onExit(
-    client: MangoClient,
-    payer: Account,
-    group: MangoGroup,
-    mangoAccount: MangoAccount,
+    ctx: BotContext,
     marketContexts: MarketContext[],
 ) {
+    const {
+        client,
+        group,
+        payer,
+        account
+    } = ctx;
+
     await sleep(control.interval);
-    mangoAccount = await client.getMangoAccount(
-        mangoAccount.publicKey,
+
+    ctx.account = await client.getMangoAccount(
+        account.publicKey,
         group.dexProgramId,
     );
     let tx = new Transaction();
@@ -561,9 +443,9 @@ async function onExit(
     for (let i = 0; i < marketContexts.length; i++) {
         const mc = marketContexts[i];
         const cancelAllInstr = makeCancelAllPerpOrdersInstruction(
-            mangoProgramId,
+            ctx.groupConfig.mangoProgramId,
             group.publicKey,
-            mangoAccount.publicKey,
+            account.publicKey,
             payer.publicKey,
             mc.market.publicKey,
             mc.market.bids,
@@ -571,7 +453,7 @@ async function onExit(
             new BN(20),
         );
         tx.add(cancelAllInstr);
-        if (tx.instructions === params.batch) {
+        if (tx.instructions === MM_PARAMS.batch) {
             txProms.push(client.sendTransaction(tx, payer, []));
             tx = new Transaction();
         }
@@ -587,12 +469,6 @@ async function onExit(
     process.exit();
 }
 
-function startMarketMaker() {
-    if (control.isRunning) {
-        fullMarketMaker().finally(startMarketMaker);
-    }
-}
-
 process.on('unhandledRejection', function (err, promise) {
     console.error(
         'Unhandled rejection (promise: ',
@@ -602,42 +478,3 @@ process.on('unhandledRejection', function (err, promise) {
         ').',
     );
 });
-
-async function loadMangoAccountWithName(
-    client: MangoClient,
-    mangoGroup: MangoGroup,
-    payer: Account,
-    mangoAccountName: string,
-): Promise<MangoAccount> {
-    const ownerAccounts = await client.getMangoAccountsForOwner(
-        mangoGroup,
-        payer.publicKey,
-        true,
-    );
-
-    for (const ownerAccount of ownerAccounts) {
-        if (mangoAccountName === ownerAccount.name) {
-            return ownerAccount;
-        }
-    }
-    throw new Error(`mangoAccountName: ${mangoAccountName} not found`);
-}
-
-async function loadMangoAccountWithPubkey(
-    client: MangoClient,
-    mangoGroup: MangoGroup,
-    payer: Account,
-    mangoAccountPk: PublicKey,
-): Promise<MangoAccount> {
-    const mangoAccount = await client.getMangoAccount(
-        mangoAccountPk,
-        mangoGroup.dexProgramId,
-    );
-
-    if (!mangoAccount.owner.equals(payer.publicKey)) {
-        throw new Error(
-            `Invalid MangoAccount owner: ${mangoAccount.owner.toString()}; expected: ${payer.publicKey.toString()}`,
-        );
-    }
-    return mangoAccount;
-}
