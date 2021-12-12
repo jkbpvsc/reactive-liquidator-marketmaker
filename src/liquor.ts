@@ -57,6 +57,7 @@ export async function startDrinking(context: BotContext) {
 }
 
 async function refreshMangoAccounts(context: BotContext) {
+    console.time('refreshAccounts')
     const debug = debugCreator('liquor:refreshAccounts');
     debug('Refreshing Mango accounts');
     const mangoAccounts = await context.client.getAllMangoAccounts(context.group, undefined, true);
@@ -68,6 +69,7 @@ async function refreshMangoAccounts(context: BotContext) {
     }
 
     debug('Done');
+    console.timeEnd('refreshAccounts')
     setTimeout(refreshMangoAccounts, REFRESH_ACCOUNT_INTERVAL, context);
 }
 
@@ -176,6 +178,8 @@ function setWebsocketSubscriptions(context: BotContext) {
 }
 
 async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: BotContext) {
+    const latencyTag = 'cacheUpdate-' + Date.now();
+    console.time(latencyTag)
     const pk = context.cache.publicKey;
     context.cache = MangoCacheLayout.decode(accountInfo.data);
     context.cache.publicKey = pk;
@@ -186,15 +190,19 @@ async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: Bot
     ]);
 
     await balanceAccount(context);
+    console.timeEnd(latencyTag)
 }
 
 async function processMangoUpdate({ accountId, accountInfo }: KeyedAccountInfo, context: BotContext) {
+    const latencyTag = 'mangoUpdate-' + Date.now();
+    console.time(latencyTag)
     const mangoAccount = new MangoAccount(accountId, MangoAccountLayout.decode(accountInfo.data));
     triageMangoAccount(mangoAccount, context);
 
     if (CHECK_TRIGGERS) {
         await triageTriggers(mangoAccount, context);
     }
+    console.timeEnd(latencyTag)
 }
 
 function triageMangoAccount(mangoAccount: MangoAccount, ctx: BotContext) {
@@ -245,6 +253,9 @@ async function triageTriggers(mangoAccount: MangoAccount, ctx: BotContext) {
 }
 
 async function processDexUpdate({ accountId, accountInfo }: KeyedAccountInfo, ctx: BotContext) {
+    const latencyTag = 'dexUpdate-' + Date.now();
+    console.time(latencyTag)
+
     const debug = debugCreator('liquidator:sub:dex')
     const ownerIndex = ctx.liquidator.mangoAccounts.findIndex((account) =>
         account.spotOpenOrders.some((key) => key.equals(accountId)),
@@ -262,6 +273,7 @@ async function processDexUpdate({ accountId, accountInfo }: KeyedAccountInfo, ct
     } else {
         debug('Could not match OpenOrdersAccount to MangoAccount');
     }
+    console.timeEnd(latencyTag)
 }
 
 async function checkTriggerOrders(ctx: BotContext) {
