@@ -3,6 +3,7 @@ import path from "path";
 
 import * as Env from 'dotenv';
 import envExpand from 'dotenv-expand';
+import {Commitment} from "@solana/web3.js";
 envExpand(Env.config());
 
 export const INTERVAL = parseInt(process.env.INTERVAL || '3500');
@@ -36,4 +37,6 @@ export enum BotModes {
  * 2 - Liquidator and Market Maker
  */
 export const BOT_MODE: BotModes = process.env.BOT_MODE ? parseInt(process.env.BOT_MODE) : BotModes.LiquidatorOnly
+
+export const COMMITMENT: Commitment = process.env.COMMITMENT as Commitment || 'processed';
 

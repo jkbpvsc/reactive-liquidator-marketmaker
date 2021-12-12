@@ -29,7 +29,8 @@ import {
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
     TARGETS,
-    TX_CACHE_RESET_DELAY
+    TX_CACHE_RESET_DELAY,
+    COMMITMENT
 } from './config'
 
 const control = {
@@ -140,13 +141,13 @@ function setWebsocketSubscriptions(context: BotContext) {
     websocket.cacheChangeSubscriptionId = context.connection.onAccountChange(
         context.cache.publicKey,
         (accountInfo) => processCacheUpdate(accountInfo, context),
-        'singleGossip',
+        COMMITMENT,
     )
 
     websocket.mangoSubscriptionId = context.connection.onProgramAccountChange(
         context.groupConfig.mangoProgramId,
         kai => processMangoUpdate(kai, context),
-        'singleGossip',
+        COMMITMENT,
         [
             { dataSize: MangoAccountLayout.span },
             {
@@ -161,7 +162,7 @@ function setWebsocketSubscriptions(context: BotContext) {
     websocket.dexSubscriptionId = context.connection.onProgramAccountChange(
         context.group.dexProgramId,
         kai => processDexUpdate(kai, context),
-        'singleGossip',
+        COMMITMENT,
         [
             { dataSize: OpenOrders.getLayout(context.group.dexProgramId).span },
             {
