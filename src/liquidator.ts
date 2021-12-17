@@ -46,8 +46,8 @@ const websocket = {
 }
 
 export async function startLiquidator(context: BotContext) {
-    const debug = debugCreator('liquor');
-    debug('Drinking...')
+    const debug = debugCreator('liquidator');
+    debug('Starting Liquidator')
     try {
         await refreshMangoAccounts(context);
         await watchAccounts(context);
@@ -58,7 +58,7 @@ export async function startLiquidator(context: BotContext) {
 
 async function refreshMangoAccounts(context: BotContext) {
     console.time('refreshAccounts')
-    const debug = debugCreator('liquor:refreshAccounts');
+    const debug = debugCreator('liquidator:refreshAccounts');
     debug('Refreshing Mango accounts');
     const mangoAccounts = await context.client.getAllMangoAccounts(context.group, undefined, true);
     filterAccounts(context, mangoAccounts);
@@ -114,7 +114,7 @@ async function loadPerpTriggers(context: BotContext, mangoAccounts: MangoAccount
 }
 
 async function watchAccounts(context: BotContext) {
-    const debug = debugCreator('liquor:watchAccounts');
+    const debug = debugCreator('liquidator:watchAccounts');
     try {
         debug('Setting WS subscriptions');
         await resetWebsocketSubscriptions(context);
