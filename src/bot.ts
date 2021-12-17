@@ -16,9 +16,9 @@ import fs from "fs";
 import os from "os";
 import debugCreator from 'debug';
 import {Market} from "@project-serum/serum";
-import {startDrinking} from "./liquor";
+import {startLiquidator} from "./liquidator";
 import path from "path";
-import {startSmoking} from "./market_maker";
+import {startMarketMaker} from "./market_maker";
 import {BOT_MODE, BotModes} from "./config";
 
 
@@ -53,11 +53,11 @@ async function run() {
     const context = await createContext();
 
     if (BOT_MODE === BotModes.LiquidatorAndMarketMaker || BOT_MODE === BotModes.LiquidatorOnly) {
-        startDrinking(context);
+        startLiquidator(context);
     }
 
     if (BOT_MODE === BotModes.LiquidatorAndMarketMaker || BOT_MODE === BotModes.MarketMakerOnly) {
-        startSmoking(context);
+        startMarketMaker(context);
     }
 }
 

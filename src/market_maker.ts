@@ -28,11 +28,11 @@ import {
 import {OpenOrders} from '@project-serum/serum';
 import path from 'path';
 import {MM_PARAMS} from "./config";
-import {BotContext} from "./john-wayne";
+import {BotContext} from "./bot";
 
-export function startSmoking(ctx: BotContext) {
+export function startMarketMaker(ctx: BotContext) {
     if (control.isRunning) {
-        fullMarketMaker(ctx).finally(() => startSmoking(ctx));
+        fullMarketMaker(ctx).finally(() => startMarketMaker(ctx));
     }
 }
 

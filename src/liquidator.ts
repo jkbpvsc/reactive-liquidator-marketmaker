@@ -1,4 +1,4 @@
-import {BotContext, PerpTriggerElement} from "./john-wayne";
+import {BotContext, PerpTriggerElement} from "./bot";
 import {
     AdvancedOrdersLayout,
     AssetType,
@@ -45,7 +45,7 @@ const websocket = {
     cacheChangeSubscriptionId: -1,
 }
 
-export async function startDrinking(context: BotContext) {
+export async function startLiquidator(context: BotContext) {
     const debug = debugCreator('liquor');
     debug('Drinking...')
     try {
