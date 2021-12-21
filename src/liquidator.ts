@@ -30,7 +30,7 @@ import {
     REFRESH_WEBSOCKET_INTERVAL,
     TARGETS,
     TX_CACHE_RESET_DELAY,
-    COMMITMENT
+    COMMITMENT, MAX_ACTIVE_TX
 } from './config'
 
 const control = {
@@ -78,7 +78,7 @@ function filterAccounts(context: BotContext, mangoAccounts: MangoAccount[]) {
     const accountsToObserve = mangoAccounts
         .map(a => ({account: a, health: a.getHealthRatio(context.group, context.cache, 'Maint').toNumber()}))
         .sort((a, b) => a.health - b.health)
-        .filter((a) => a.health < healthThreshold)
+        .filter(({ health }) => health < healthThreshold)
         .map(a => a.account);
 
     context.liquidator?.mangoAccounts.splice(0,context.liquidator?.mangoAccounts.length, ...accountsToObserve);
@@ -300,6 +300,11 @@ async function checkTriggerOrders(ctx: BotContext) {
             const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
             try {
+                if (Object.values(control.activeTxCache).length >= MAX_ACTIVE_TX) {
+                    debug(`skipping, too many active transactions`);
+                    return
+                }
+
                 if (control.activeTxCache[cacheKey]) {
                     debug(`skipping: ${cacheKey}`)
                     return
@@ -340,6 +345,11 @@ async function checkMangoAccounts(ctx: BotContext) {
             }
             const cacheKey = `liquidate-${account.publicKey.toString()}}`;
             try {
+                if (Object.values(control.activeTxCache).length >= MAX_ACTIVE_TX) {
+                    debug(`skipping, too many active transactions`);
+                    return
+                }
+
                 if (control.activeTxCache[cacheKey]) {
                     debug(`SKIP: ${cacheKey} active, skipping`)
                     return
@@ -1110,5 +1120,5 @@ async function closePositions(
 }
 
 function resetCache(key) {
-    setTimeout(() => { control.activeTxCache[key] = undefined }, TX_CACHE_RESET_DELAY);
+    setTimeout(() => { delete control.activeTxCache[key] }, TX_CACHE_RESET_DELAY);
 }

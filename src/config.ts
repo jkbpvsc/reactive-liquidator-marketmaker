@@ -40,3 +40,5 @@ export const BOT_MODE: BotModes = process.env.BOT_MODE ? parseInt(process.env.BO
 
 export const COMMITMENT: Commitment = process.env.COMMITMENT as Commitment || 'processed';
 
+export const MAX_ACTIVE_TX: number = process.env.MAX_ACTIVE_TX ? parseInt(process.env.MAX_ACTIVE_TX) : 4;
+
