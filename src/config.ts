@@ -4,12 +4,13 @@ import path from "path";
 import * as Env from 'dotenv';
 import envExpand from 'dotenv-expand';
 import {Commitment} from "@solana/web3.js";
+import * as module from "module";
 envExpand(Env.config());
 
 export const INTERVAL = parseInt(process.env.INTERVAL || '3500');
 export const REFRESH_ACCOUNT_INTERVAL = parseInt(process.env.INTERVAL_ACCOUNTS || '120000');
 export const REFRESH_WEBSOCKET_INTERVAL = parseInt(process.env.INTERVAL_WEBSOCKET || '300000',);
-export const CHECK_TRIGGERS = process.env.CHECK_TRIGGERS ? process.env.CHECK_TRIGGERS === 'true' : true;
+export const CHECK_TRIGGERS = process.env.CHECK_TRIGGERS == '1';
 export const HEALTH_THRESHOLD = process.env.HEALTH_THRESHOLD ? Number.parseInt(process.env.HEALTH_THRESHOLD) : 10;
 export const TX_CACHE_RESET_DELAY = parseInt(process.env.CACHE_RESET_DELAY || '300000');
 export const TARGETS = process.env.TARGETS
@@ -42,3 +43,20 @@ export const COMMITMENT: Commitment = process.env.COMMITMENT as Commitment || 'p
 
 export const MAX_ACTIVE_TX: number = process.env.MAX_ACTIVE_TX ? parseInt(process.env.MAX_ACTIVE_TX) : 4;
 
+(() => {
+    const util = require('util')
+    const a = require('./config');
+    console.log('Config');
+
+    Object.keys(a).forEach((param) => {
+        if (param === 'BotModes') {
+            return
+        }
+
+        if (typeof a[param] == 'object') {
+            console.log(util.inspect(a[param], false, null, true))
+        } else {
+            console.log(param, a[param])
+        }
+    });
+})()
