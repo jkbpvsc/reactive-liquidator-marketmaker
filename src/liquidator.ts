@@ -300,7 +300,9 @@ async function checkTriggerOrders(ctx: BotContext) {
             const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
             try {
-                if (Object.values(control.activeTxCache).length >= MAX_ACTIVE_TX) {
+                debug(`Perp triggers active ${Object.keys(control.activeTxCache).length}`);
+
+                if (Object.keys(control.activeTxCache).length >= MAX_ACTIVE_TX) {
                     debug(`skipping, too many active transactions`);
                     return
                 }
