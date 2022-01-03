@@ -295,8 +295,8 @@ async function checkTriggerOrders(ctx: BotContext) {
 
             debug(`Processing trigger ${cacheKey}`)
 
-            try {
-                if (await canExecuteTx(cacheKey, ctx)) {
+            if (await canExecuteTx(cacheKey, ctx)) {
+                try {
                     ctx.liquidator.perpTriggers[index] = null
 
                     await ctx.client.executePerpTriggerOrder(
@@ -307,12 +307,12 @@ async function checkTriggerOrders(ctx: BotContext) {
                         ctx.payer,
                         queueElement!.index,
                     );
+                } catch (e) {
+                    debug(`Processing ${cacheKey} failed`)
+                    console.error(e)
+                } finally {
+                    resetCache(cacheKey, ctx)
                 }
-            } catch (e) {
-                debug(`Processing ${cacheKey} failed`)
-                console.error(e)
-            } finally {
-                resetCache(cacheKey, ctx)
             }
         }
     }))
@@ -330,15 +330,15 @@ async function checkMangoAccounts(ctx: BotContext) {
                 return
             }
             const cacheKey = `liquidate-${account.publicKey.toString()}}`;
-            try {
-                if (await canExecuteTx(cacheKey, ctx)) {
+            if (await canExecuteTx(cacheKey, ctx)) {
+                try {
                     await liquidateAccount(account, ctx);
+                } catch (e) {
+                    debug(`Processing ${cacheKey} failed`)
+                    console.error(e)
+                } finally {
+                    resetCache(cacheKey, ctx);
                 }
-            } catch (e) {
-                debug(`Processing ${cacheKey} failed`)
-                console.error(e)
-            } finally {
-                resetCache(cacheKey, ctx)
             }
         }
     }))
