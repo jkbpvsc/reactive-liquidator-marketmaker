@@ -33,6 +33,7 @@ import {
     INTERVAL,
     LOG_TIME,
     MAX_ACTIVE_TX,
+    minLiqorHealth,
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
     TARGETS,
@@ -363,6 +364,7 @@ async function checkMangoAccounts(ctx: BotContext) {
                 debug(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
                 return
             }
+
             const txKey = `liquidate-${account.publicKey.toString()}}`;
             if (await canExecuteTx(txKey, ctx)) {
                 try {
@@ -382,6 +384,15 @@ async function liquidateAccount(
     account: MangoAccount,
     ctx: BotContext,
 ) {
+    let liqorHealth = ctx.account.getHealthRatio(ctx.group, ctx.cache, 'Maint')
+    const isLiqorHealthy = liqorHealth.toNumber() > minLiqorHealth
+
+    if (!isLiqorHealthy) {
+        console.error(`Liquidator unhealthy at ${liqorHealth}, waiting...`);
+        await sleep(INTERVAL * 4);
+        return;
+    }
+
     const debug = debugCreator('liquidator:exe:liquidator')
     debug('Liquidating account', account.publicKey.toString());
 

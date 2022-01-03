@@ -34,6 +34,9 @@ export enum BotModes {
     LiquidatorAndMarketMaker
 }
 
+export const minLiqorHealth = parseInt(
+  process.env.MIN_LIQOR_HEALTH || '25',
+);  
 /**
  * Modes:
  * 0 - Liquidator Only
