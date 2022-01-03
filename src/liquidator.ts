@@ -291,11 +291,11 @@ async function checkTriggerOrders(ctx: BotContext) {
             (order.triggerCondition == 'below' &&
                 currentPrice.lt(order.triggerPrice))
         ) {
-            const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
+            const txKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
-            debug(`Processing trigger ${cacheKey}`)
+            debug(`Processing trigger ${txKey}`)
 
-            if (await canExecuteTx(cacheKey, ctx)) {
+            if (await canExecuteTx(txKey, ctx)) {
                 try {
                     ctx.liquidator.perpTriggers[index] = null
 
@@ -308,10 +308,10 @@ async function checkTriggerOrders(ctx: BotContext) {
                         queueElement!.index,
                     );
                 } catch (e) {
-                    debug(`Processing ${cacheKey} failed`)
+                    debug(`Processing ${txKey} failed`)
                     console.error(e)
                 } finally {
-                    resetCache(cacheKey, ctx)
+                    clearAtx(txKey, ctx)
                 }
             }
         }
@@ -329,15 +329,15 @@ async function checkMangoAccounts(ctx: BotContext) {
                 debug(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
                 return
             }
-            const cacheKey = `liquidate-${account.publicKey.toString()}}`;
-            if (await canExecuteTx(cacheKey, ctx)) {
+            const txKey = `liquidate-${account.publicKey.toString()}}`;
+            if (await canExecuteTx(txKey, ctx)) {
                 try {
                     await liquidateAccount(account, ctx);
                 } catch (e) {
-                    debug(`Processing ${cacheKey} failed`)
+                    debug(`Processing ${txKey} failed`)
                     console.error(e)
                 } finally {
-                    resetCache(cacheKey, ctx);
+                    clearAtx(txKey, ctx);
                 }
             }
         }
@@ -1104,7 +1104,7 @@ function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
         ctx.control.lock.acquire(LOCK_KEY, () => {
             const debug = debugCreator('liquidator:exe:tx:controller')
 
-            debug(`Diagnostic: eval tx label ${key}`)
+            debug(`Diagnostic: eval tx key ${key}`)
 
             const activeTxsCount = Object.keys(ctx.control.activeTxReg).length;
             debug(`Atx reg size ${activeTxsCount}`)
@@ -1128,7 +1128,7 @@ function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
     }))
 }
 
-function resetCache(key: string, ctx: BotContext) {
+function clearAtx(key: string, ctx: BotContext) {
     const debug = debugCreator('liquidator:exe:tx:controller')
     debug(`Priming remove ${key} from active tx reg in ${TX_CACHE_RESET_DELAY/(1000 * 60)}m, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
     setTimeout(() => {
