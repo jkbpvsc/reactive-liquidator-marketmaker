@@ -1098,7 +1098,7 @@ const LOCK_KEY = 'atx_lock';
 function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
     return new Promise<boolean>(((resolve, reject) => {
         ctx.control.lock.acquire(LOCK_KEY, () => {
-            const debug = debugCreator('tx:controller')
+            const debug = debugCreator('liquidator:exe:tx:controller')
 
             debug(`Diagnostic: eval tx label ${key}`)
 
@@ -1124,31 +1124,8 @@ function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
     }))
 }
 
-function canTxExecute(key: string, ctx: BotContext) {
-    const debug = debugCreator('tx:controller')
-
-    debug(`Diagnostic: eval tx label ${key}`)
-
-    const activeTxsCount = Object.keys(ctx.control.activeTxReg).length;
-    debug(`Atx reg size ${activeTxsCount}`)
-
-    if (ctx.control.activeTxReg[key]) {
-        debug(`Tx active ${key}, skipping`)
-        return false
-    }
-
-    if (activeTxsCount >= MAX_ACTIVE_TX) {
-        debug(`To many atx size, skipping`)
-        return false
-    }
-
-    ctx.control.activeTxReg[key] = true;
-
-    return true
-}
-
 function resetCache(key: string, ctx: BotContext) {
-    const debug = debugCreator('tx:controller')
+    const debug = debugCreator('liquidator:exe:tx:controller')
     debug(`Priming remove ${key} from active tx reg in ${TX_CACHE_RESET_DELAY/(1000 * 60)}m, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
     setTimeout(() => {
         ctx.control.lock.acquire(LOCK_KEY, () => {
