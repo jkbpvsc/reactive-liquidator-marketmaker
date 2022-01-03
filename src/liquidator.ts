@@ -291,6 +291,8 @@ async function checkTriggerOrders(ctx: BotContext) {
             (order.triggerCondition == 'below' &&
                 currentPrice.lt(order.triggerPrice))
         ) {
+            debug(`Processing trigger ${queueElement!.index} for account ${mangoAccount.publicKey.toString()}`)
+
             const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
             try {
