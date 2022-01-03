@@ -291,9 +291,9 @@ async function checkTriggerOrders(ctx: BotContext) {
             (order.triggerCondition == 'below' &&
                 currentPrice.lt(order.triggerPrice))
         ) {
-            debug(`Processing trigger ${queueElement!.index} for account ${mangoAccount.publicKey.toString()}`)
-
             const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
+
+            debug(`Processing trigger ${cacheKey}`)
 
             try {
                 if (await canExecuteTx(cacheKey, ctx)) {
@@ -309,6 +309,7 @@ async function checkTriggerOrders(ctx: BotContext) {
                     );
                 }
             } catch (e) {
+                debug(`Processing ${cacheKey} failed`)
                 console.error(e)
             } finally {
                 resetCache(cacheKey, ctx)
@@ -334,6 +335,7 @@ async function checkMangoAccounts(ctx: BotContext) {
                     await liquidateAccount(account, ctx);
                 }
             } catch (e) {
+                debug(`Processing ${cacheKey} failed`)
                 console.error(e)
             } finally {
                 resetCache(cacheKey, ctx)
