@@ -16,8 +16,14 @@ export const CHECK_TRIGGERS = process.env.CHECK_TRIGGERS == '1';
 export const LOG_TIME = process.env.LOG_TIME == '1';
 export const HEALTH_THRESHOLD = process.env.HEALTH_THRESHOLD ? Number.parseInt(process.env.HEALTH_THRESHOLD) : 100;
 export const TX_CACHE_RESET_DELAY = parseInt(process.env.CACHE_RESET_DELAY || '300000');
+
+// Target values to keep in spot, ordered the same as in mango client's ids.json
+// Example:
+//
+//         MNGO BTC ETH SOL USDT SRM RAY COPE FTT MSOL
+// TARGETS=0    0   0   1   0    0   0   0    0   0
 export const TARGETS = process.env.TARGETS
-    ? process.env.TARGETS.split(' ').map((s) => parseFloat(s))
+    ? process.env.TARGETS.replace(/\s+/g,' ').trim().split(' ').map((s) => parseFloat(s))
     : [0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 const PARAMS_FILE_NAME = process.env.PARAMS || 'default.json';
