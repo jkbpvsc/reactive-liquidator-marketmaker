@@ -34,6 +34,9 @@ export enum BotModes {
     LiquidatorAndMarketMaker
 }
 
+export const shouldBalance = process.env.BALANCE
+  ? process.env.BALANCE === 'true'
+  : true;
 export const minLiqorHealth = parseInt(
   process.env.MIN_LIQOR_HEALTH || '25',
 );  

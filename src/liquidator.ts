@@ -36,6 +36,7 @@ import {
     minLiqorHealth,
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
+    shouldBalance,
     TARGETS,
     TX_CACHE_RESET_DELAY
 } from './config'
@@ -960,6 +961,9 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
+    if (!shouldBalance) {
+        return
+    }
     const debug = debugCreator('liquidator:balanceAccount')
     debug('Acquiring lock')
     ctx.control.lock.acquire('balanceAccount', async () => {
