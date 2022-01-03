@@ -30,14 +30,8 @@ import {
     REFRESH_WEBSOCKET_INTERVAL,
     TARGETS,
     TX_CACHE_RESET_DELAY,
-    COMMITMENT, MAX_ACTIVE_TX
+    COMMITMENT, MAX_ACTIVE_TX, LOG_TIME
 } from './config'
-
-const control = {
-    refreshing: false,
-    activeTxCache: {},
-    checkRebalance: false,
-}
 
 const websocket = {
     mangoSubscriptionId: -1,
@@ -57,7 +51,7 @@ export async function startLiquidator(context: BotContext) {
 }
 
 async function refreshMangoAccounts(context: BotContext) {
-    console.time('refreshAccounts')
+    logTime('refreshAccounts')
     const debug = debugCreator('liquidator:refreshAccounts');
     debug('Refreshing Mango accounts');
     const mangoAccounts = await context.client.getAllMangoAccounts(context.group, undefined, true);
@@ -69,7 +63,7 @@ async function refreshMangoAccounts(context: BotContext) {
     }
 
     debug('Done');
-    console.timeEnd('refreshAccounts')
+    logTime('refreshAccounts', true)
     setTimeout(refreshMangoAccounts, REFRESH_ACCOUNT_INTERVAL, context);
 }
 
@@ -179,7 +173,7 @@ function setWebsocketSubscriptions(context: BotContext) {
 
 async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: BotContext) {
     const latencyTag = 'cacheUpdate-' + Date.now();
-    console.time(latencyTag)
+    logTime(latencyTag)
     const pk = context.cache.publicKey;
     context.cache = MangoCacheLayout.decode(accountInfo.data);
     context.cache.publicKey = pk;
@@ -190,19 +184,19 @@ async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: Bot
     ]);
 
     await balanceAccount(context);
-    console.timeEnd(latencyTag)
+    logTime(latencyTag, true)
 }
 
 async function processMangoUpdate({ accountId, accountInfo }: KeyedAccountInfo, context: BotContext) {
     const latencyTag = 'mangoUpdate-' + Date.now();
-    console.time(latencyTag)
+    logTime(latencyTag);
     const mangoAccount = new MangoAccount(accountId, MangoAccountLayout.decode(accountInfo.data));
     triageMangoAccount(mangoAccount, context);
 
     if (CHECK_TRIGGERS) {
         await triageTriggers(mangoAccount, context);
     }
-    console.timeEnd(latencyTag)
+    logTime(latencyTag, true);
 }
 
 function triageMangoAccount(mangoAccount: MangoAccount, ctx: BotContext) {
@@ -254,7 +248,7 @@ async function triageTriggers(mangoAccount: MangoAccount, ctx: BotContext) {
 
 async function processDexUpdate({ accountId, accountInfo }: KeyedAccountInfo, ctx: BotContext) {
     const latencyTag = 'dexUpdate-' + Date.now();
-    console.time(latencyTag)
+    logTime(latencyTag)
 
     const debug = debugCreator('liquidator:sub:dex')
     const ownerIndex = ctx.liquidator.mangoAccounts.findIndex((account) =>
@@ -273,7 +267,7 @@ async function processDexUpdate({ accountId, accountInfo }: KeyedAccountInfo, ct
     } else {
         debug('Could not match OpenOrdersAccount to MangoAccount');
     }
-    console.timeEnd(latencyTag)
+    logTime(latencyTag, true);
 }
 
 async function checkTriggerOrders(ctx: BotContext) {
@@ -300,35 +294,22 @@ async function checkTriggerOrders(ctx: BotContext) {
             const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
             try {
-                debug(`Perp triggers active ${Object.keys(control.activeTxCache).length}`);
+                if (await canExecuteTx(cacheKey, ctx)) {
+                    ctx.liquidator.perpTriggers[index] = null
 
-                if (Object.keys(control.activeTxCache).length >= MAX_ACTIVE_TX) {
-                    debug(`skipping, too many active transactions`);
-                    return
+                    await ctx.client.executePerpTriggerOrder(
+                        ctx.group,
+                        mangoAccount,
+                        ctx.cache,
+                        ctx.perpMarkets[configMarketIndex],
+                        ctx.payer,
+                        queueElement!.index,
+                    );
                 }
-
-                if (control.activeTxCache[cacheKey]) {
-                    debug(`skipping: ${cacheKey}`)
-                    return
-                }
-
-                debug(`executing trigger order for account ${mangoAccount.publicKey.toBase58()}`,);
-
-                ctx.liquidator.perpTriggers[index] = null
-                control.activeTxCache[cacheKey] = true;
-
-                await ctx.client.executePerpTriggerOrder(
-                    ctx.group,
-                    mangoAccount,
-                    ctx.cache,
-                    ctx.perpMarkets[configMarketIndex],
-                    ctx.payer,
-                    queueElement!.index,
-                );
             } catch (e) {
                 console.error(e)
             } finally {
-                resetCache(cacheKey)
+                resetCache(cacheKey, ctx)
             }
         }
     }))
@@ -347,22 +328,13 @@ async function checkMangoAccounts(ctx: BotContext) {
             }
             const cacheKey = `liquidate-${account.publicKey.toString()}}`;
             try {
-                if (Object.values(control.activeTxCache).length >= MAX_ACTIVE_TX) {
-                    debug(`skipping, too many active transactions`);
-                    return
+                if (await canExecuteTx(cacheKey, ctx)) {
+                    await liquidateAccount(account, ctx);
                 }
-
-                if (control.activeTxCache[cacheKey]) {
-                    debug(`SKIP: ${cacheKey} active, skipping`)
-                    return
-                }
-
-                control.activeTxCache[cacheKey] = true;
-                await liquidateAccount(account, ctx);
             } catch (e) {
                 console.error(e)
             } finally {
-                resetCache(cacheKey)
+                resetCache(cacheKey, ctx)
             }
         }
     }))
@@ -432,7 +404,7 @@ async function liquidateAccount(
         }
     }
 
-    control.checkRebalance = true;
+    ctx.control.activeTxReg.checkRebalance = true;
 
     const healthComponents = account.getHealthComponents(ctx.group, ctx.cache);
     const maintHealths = account.getHealthsFromComponents(
@@ -826,11 +798,11 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
-    if (!control.checkRebalance) {
+    if (!ctx.control.activeTxReg.checkRebalance) {
         return
     }
 
-    control.checkRebalance = false
+    ctx.control.activeTxReg.checkRebalance = false
 
     const {
         spotMarkets,
@@ -1121,6 +1093,79 @@ async function closePositions(
     }
 }
 
-function resetCache(key) {
-    setTimeout(() => { delete control.activeTxCache[key] }, TX_CACHE_RESET_DELAY);
+const LOCK_KEY = 'atx_lock';
+
+function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
+    return new Promise<boolean>(((resolve, reject) => {
+        ctx.control.lock.acquire(LOCK_KEY, () => {
+            const debug = debugCreator('tx:controller')
+
+            debug(`Diagnostic: eval tx label ${key}`)
+
+            const activeTxsCount = Object.keys(ctx.control.activeTxReg).length;
+            debug(`Atx reg size ${activeTxsCount}`)
+
+            if (ctx.control.activeTxReg[key]) {
+                debug(`Tx active ${key}, skipping`)
+                resolve(false);
+                return
+            }
+
+            if (activeTxsCount >= MAX_ACTIVE_TX) {
+                debug(`To many atx size, skipping`)
+                resolve(false);
+                return
+            }
+
+            ctx.control.activeTxReg[key] = true;
+
+            resolve(true);
+        });
+    }))
+}
+
+function canTxExecute(key: string, ctx: BotContext) {
+    const debug = debugCreator('tx:controller')
+
+    debug(`Diagnostic: eval tx label ${key}`)
+
+    const activeTxsCount = Object.keys(ctx.control.activeTxReg).length;
+    debug(`Atx reg size ${activeTxsCount}`)
+
+    if (ctx.control.activeTxReg[key]) {
+        debug(`Tx active ${key}, skipping`)
+        return false
+    }
+
+    if (activeTxsCount >= MAX_ACTIVE_TX) {
+        debug(`To many atx size, skipping`)
+        return false
+    }
+
+    ctx.control.activeTxReg[key] = true;
+
+    return true
+}
+
+function resetCache(key: string, ctx: BotContext) {
+    const debug = debugCreator('tx:controller')
+    debug(`Priming remove ${key} from active tx reg in ${TX_CACHE_RESET_DELAY/(1000 * 60)}m, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
+    setTimeout(() => {
+        ctx.control.lock.acquire(LOCK_KEY, () => {
+            delete ctx.control.activeTxReg[key]
+            debug(`Removing ${key} from active tx reg, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
+        });
+    }, TX_CACHE_RESET_DELAY);
+}
+
+function logTime(label: string, end: boolean = false) {
+    if (!LOG_TIME) {
+       return
+    }
+
+    if (!end) {
+        console.time(label);
+    } else {
+        console.timeEnd(label)
+    }
 }

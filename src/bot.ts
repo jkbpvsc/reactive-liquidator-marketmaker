@@ -21,6 +21,7 @@ import path from "path";
 import {startMarketMaker} from "./market_maker";
 import {BOT_MODE, BotModes} from "./config";
 
+import AsyncLock from 'async-lock';
 
 debugCreator.log = console.info.bind(console);
 
@@ -43,7 +44,13 @@ export interface BotContext {
     },
     marketMaker: {
         params: any,
-
+    },
+    control: {
+        activeTxReg: {
+            [txId: string]: boolean
+        },
+        checkReBalance: boolean,
+        lock: AsyncLock
     }
 }
 
@@ -176,6 +183,11 @@ async function createContext(): Promise<BotContext> {
         },
         marketMaker: {
             params,
+        },
+        control: {
+            checkReBalance: false,
+            activeTxReg: {},
+            lock: new AsyncLock(),
         }
     }
 }
