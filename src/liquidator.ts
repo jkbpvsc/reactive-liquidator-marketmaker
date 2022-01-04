@@ -275,7 +275,7 @@ async function checkTriggerOrders(ctx: BotContext) {
         return
     }
 
-    const debug = debugCreator('liquidator:exe:perpOrderTriggers')
+    const debug = debugCreator('liquidator:exe:advancedOrders')
     await Promise.all(ctx.liquidator.perpTriggers
         .filter(e => e !== null)
         .map(async (queueElement, index) => {
@@ -294,6 +294,7 @@ async function checkTriggerOrders(ctx: BotContext) {
             const txKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
             debug(`Processing trigger ${txKey}`)
+            debug(`Order ${order.clientOrderId}`)
 
             if (await canExecuteTx(txKey, ctx)) {
                 try {
@@ -307,11 +308,16 @@ async function checkTriggerOrders(ctx: BotContext) {
                         ctx.payer,
                         queueElement!.index,
                     );
+
+                    debug(`Processing ${txKey} successful`)
+
+                    clearAtx(txKey, ctx, true);
                 } catch (e) {
                     debug(`Processing ${txKey} failed`)
+                    debug(e)
                     console.error(e)
-                } finally {
-                    clearAtx(txKey, ctx)
+
+                    clearAtx(txKey, ctx);
                 }
             }
         }
@@ -319,7 +325,7 @@ async function checkTriggerOrders(ctx: BotContext) {
 }
 
 async function checkMangoAccounts(ctx: BotContext) {
-    const debug = debugCreator('liquidator:susAccountInspector');
+    const debug = debugCreator('liquidator:accountInspector');
 
     await Promise.all(ctx.liquidator.mangoAccounts.map(async (account, i) => {
         if (account.isLiquidatable(ctx.group, ctx.cache)) {
@@ -1128,15 +1134,17 @@ function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
     }))
 }
 
-function clearAtx(key: string, ctx: BotContext) {
+function clearAtx(key: string, ctx: BotContext, instant: boolean = false) {
     const debug = debugCreator('liquidator:exe:tx:controller')
-    debug(`Priming remove ${key} from active tx reg in ${TX_CACHE_RESET_DELAY/(1000 * 60)}m, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
+    const delayTime = instant ? 0 : TX_CACHE_RESET_DELAY
+
+    debug(`Priming remove ${key} from active tx reg in ${ delayTime /(1000 * 60)}m, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
     setTimeout(() => {
         ctx.control.lock.acquire(LOCK_KEY, () => {
             delete ctx.control.activeTxReg[key]
             debug(`Removing ${key} from active tx reg, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
         });
-    }, TX_CACHE_RESET_DELAY);
+    }, delayTime);
 }
 
 function logTime(label: string, end: boolean = false) {
