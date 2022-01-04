@@ -69,7 +69,7 @@ async function run() {
 }
 
 async function createContext(): Promise<BotContext> {
-    const debug = debugCreator('john-wayne');
+    const debug = debugCreator('bot');
     debug('Starting bot');
     const config = new Config(IDS);
     const cluster = (process.env.CLUSTER || 'mainnet') as Cluster;
