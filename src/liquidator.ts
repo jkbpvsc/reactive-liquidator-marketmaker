@@ -1113,7 +1113,7 @@ function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
             debug(`Diagnostic: eval tx key ${key}`)
 
             const activeTxsCount = Object.keys(ctx.control.activeTxReg).length;
-            debug(`Atx reg size ${activeTxsCount}`)
+            debug(`Active txs ${activeTxsCount}`)
 
             if (ctx.control.activeTxReg[key]) {
                 debug(`Tx active ${key}, skipping`)
@@ -1122,13 +1122,12 @@ function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
             }
 
             if (activeTxsCount >= MAX_ACTIVE_TX) {
-                debug(`To many atx size, skipping`)
+                debug(`Too many active txs, skipping`)
                 resolve(false);
                 return
             }
 
             ctx.control.activeTxReg[key] = true;
-
             resolve(true);
         });
     }))
