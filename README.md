@@ -1,3 +1,7 @@
+# !!Warning!!
+> This liquidator has a bug when checking advanced order triggers, so please run it with `CHECK_TRIGGERS=0`.
+> The bug should be addressed soon, normal liquidation logic doesn't suffer from this bug.
+
 # liquidator-v3
 A script for liquidating undercollateralized account on Mango Markets
 
