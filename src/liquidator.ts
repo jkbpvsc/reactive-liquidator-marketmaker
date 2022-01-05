@@ -297,7 +297,7 @@ async function checkTriggerOrders(ctx: BotContext) {
         ) {
             const txKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
-            debug(`Processing trigger ${txKey}`)
+            debug(`Processing trigger ${txKey}, index: ${index}`)
             debug(`Order ${order.clientOrderId}`)
 
             ctx.liquidator.perpTriggers[index] = null
