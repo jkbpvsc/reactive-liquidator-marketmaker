@@ -279,7 +279,7 @@ async function checkTriggerOrders(ctx: BotContext) {
 
     const validTriggers = ctx.liquidator.perpTriggers.filter(e => e !== null);
 
-    debug(`Advanced order queue ${validTriggers}`)
+    debug(`Advanced order queue ${validTriggers.length}`)
 
     await Promise.all(validTriggers
         .map(async (queueElement, index) => {
