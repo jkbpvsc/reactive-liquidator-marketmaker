@@ -178,13 +178,39 @@ async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: Bot
     context.cache = MangoCacheLayout.decode(accountInfo.data);
     context.cache.publicKey = pk;
 
-    await Promise.all([
-        await checkTriggerOrders(context),
-        await checkMangoAccounts(context),
-    ]);
+    if (await canStartCheck(context)) {
+        await Promise.all([
+            await checkTriggerOrders(context),
+            await checkMangoAccounts(context),
+        ]);
+
+        endCheck(context);
+    }
 
     await balanceAccount(context);
     logTime(latencyTag, true)
+}
+
+
+const LOCK_KEY_UPDATE = 'cacheUpdate';
+
+async function canStartCheck(ctx: BotContext) {
+    const debug = debugCreator('liquidator:sub:lock');
+    return new Promise((resolve => {
+        ctx.control.lock.acquire(LOCK_KEY_UPDATE, () => {
+            let status = !ctx.control.processingUpdate;
+            ctx.control.processingUpdate = true;
+
+            debug(`can start: ${status}`);
+
+            resolve(status);
+        })
+    }))
+
+}
+
+async function endCheck(ctx: BotContext) {
+    ctx.control.processingUpdate = false;
 }
 
 async function processMangoUpdate({ accountId, accountInfo }: KeyedAccountInfo, context: BotContext) {

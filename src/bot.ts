@@ -50,7 +50,8 @@ export interface BotContext {
             [txId: string]: boolean
         },
         checkReBalance: boolean,
-        lock: AsyncLock
+        lock: AsyncLock,
+        processingUpdate: boolean,
     }
 }
 
