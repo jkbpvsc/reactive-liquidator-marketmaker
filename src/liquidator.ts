@@ -276,8 +276,12 @@ async function checkTriggerOrders(ctx: BotContext) {
     }
 
     const debug = debugCreator('liquidator:exe:advancedOrders')
-    await Promise.all(ctx.liquidator.perpTriggers
-        .filter(e => e !== null)
+
+    const validTriggers = ctx.liquidator.perpTriggers.filter(e => e !== null);
+
+    debug(`Advanced order queue ${validTriggers}`)
+
+    await Promise.all(validTriggers
         .map(async (queueElement, index) => {
 
         const { order, mangoAccount } = queueElement!;
@@ -316,7 +320,7 @@ async function checkTriggerOrders(ctx: BotContext) {
                     debug(`Processing ${txKey} failed`)
                     debug(e)
                     console.error(e)
-                    
+
                     clearAtx(txKey, ctx);
                 }
             }
