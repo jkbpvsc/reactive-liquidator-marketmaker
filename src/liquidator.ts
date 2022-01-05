@@ -417,9 +417,7 @@ async function liquidateAccount(
             throw new Error('Account no longer liquidatable');
         }
     }
-
-    ctx.control.activeTxReg.checkRebalance = true;
-
+    
     const healthComponents = account.getHealthComponents(ctx.group, ctx.cache);
     const maintHealths = account.getHealthsFromComponents(
         ctx.group,
@@ -812,12 +810,6 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
-    if (!ctx.control.activeTxReg.checkRebalance) {
-        return
-    }
-
-    ctx.control.activeTxReg.checkRebalance = false
-
     const {
         spotMarkets,
         perpMarkets,

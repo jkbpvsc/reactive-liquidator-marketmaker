@@ -49,7 +49,6 @@ export interface BotContext {
         activeTxReg: {
             [txId: string]: boolean
         },
-        checkReBalance: boolean,
         lock: AsyncLock
     }
 }
@@ -185,7 +184,6 @@ async function createContext(): Promise<BotContext> {
             params,
         },
         control: {
-            checkReBalance: false,
             activeTxReg: {},
             lock: new AsyncLock(),
         }
