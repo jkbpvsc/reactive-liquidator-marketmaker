@@ -296,10 +296,10 @@ async function checkTriggerOrders(ctx: BotContext) {
             debug(`Processing trigger ${txKey}`)
             debug(`Order ${order.clientOrderId}`)
 
+            ctx.liquidator.perpTriggers[index] = null
+
             if (await canExecuteTx(txKey, ctx)) {
                 try {
-                    ctx.liquidator.perpTriggers[index] = null
-
                     await ctx.client.executePerpTriggerOrder(
                         ctx.group,
                         mangoAccount,
@@ -316,7 +316,7 @@ async function checkTriggerOrders(ctx: BotContext) {
                     debug(`Processing ${txKey} failed`)
                     debug(e)
                     console.error(e)
-
+                    
                     clearAtx(txKey, ctx);
                 }
             }
