@@ -417,7 +417,7 @@ async function liquidateAccount(
             throw new Error('Account no longer liquidatable');
         }
     }
-    
+
     const healthComponents = account.getHealthComponents(ctx.group, ctx.cache);
     const maintHealths = account.getHealthsFromComponents(
         ctx.group,
@@ -810,34 +810,43 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
-    const {
-        spotMarkets,
-        perpMarkets,
-        group,
-        account
-    } = ctx;
+    const debug = debugCreator('liquidator:balanceAccount')
+    debug('Acquiring lock')
+    ctx.control.lock.acquire('balanceAccount', async () => {
+        debug('Lock acquired')
+        const {
+            spotMarkets,
+            perpMarkets,
+            group,
+            account
+        } = ctx;
 
-    const {diffs, netValues} = getDiffsAndNet(ctx);
-    const tokensUnbalanced = netValues.some(
-        (nv) => Math.abs(diffs[nv[0]].toNumber()) > spotMarkets[nv[0]].minOrderSize,
-    );
-    const positionsUnbalanced = perpMarkets.some((pm) => {
-        const index = group.getPerpMarketIndex(pm.publicKey);
-        const perpAccount = account.perpAccounts[index];
-        const basePositionSize = Math.abs(
-            pm.baseLotsToNumber(perpAccount.basePosition),
+        const {diffs, netValues} = getDiffsAndNet(ctx);
+        const tokensUnbalanced = netValues.some(
+            (nv) => Math.abs(diffs[nv[0]].toNumber()) > spotMarkets[nv[0]].minOrderSize,
         );
+        const positionsUnbalanced = perpMarkets.some((pm) => {
+            const index = group.getPerpMarketIndex(pm.publicKey);
+            const perpAccount = account.perpAccounts[index];
+            const basePositionSize = Math.abs(
+                pm.baseLotsToNumber(perpAccount.basePosition),
+            );
 
-        return basePositionSize != 0 || perpAccount.quotePosition.gt(ZERO_I80F48);
+            return basePositionSize != 0 || perpAccount.quotePosition.gt(ZERO_I80F48);
+        });
+
+        debug(`Tokens unbalanced: ${tokensUnbalanced}, positions unbalanced ${positionsUnbalanced}`);
+
+        if (tokensUnbalanced) {
+            await balanceTokens(ctx);
+        }
+
+        if (positionsUnbalanced) {
+            await closePositions(ctx);
+        }
+
+        debug('Lock released')
     });
-
-    if (tokensUnbalanced) {
-        await balanceTokens(ctx);
-    }
-
-    if (positionsUnbalanced) {
-        await closePositions(ctx);
-    }
 }
 
 async function balanceTokens(
