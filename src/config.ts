@@ -40,10 +40,10 @@ export enum BotModes {
     LiquidatorAndMarketMaker
 }
 
-export const shouldBalance = process.env.BALANCE
+export const SHOULD_BALANCE = process.env.BALANCE
   ? process.env.BALANCE === 'true'
   : true;
-export const minLiqorHealth = parseInt(
+export const MIN_LIQOR_HEALTH = parseInt(
   process.env.MIN_LIQOR_HEALTH || '25',
 );  
 // Do not liquidate accounts that have less than this much in value

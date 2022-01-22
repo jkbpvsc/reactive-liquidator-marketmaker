@@ -33,11 +33,11 @@ import {
     INTERVAL,
     LOG_TIME,
     MAX_ACTIVE_TX,
-    minLiqorHealth,
     MIN_EQUITY,
+    MIN_LIQOR_HEALTH,
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
-    shouldBalance,
+    SHOULD_BALANCE,
     TARGETS,
     TX_CACHE_RESET_DELAY
 } from './config'
@@ -397,7 +397,7 @@ async function liquidateAccount(
     ctx: BotContext,
 ) {
     let liqorHealth = ctx.account.getHealthRatio(ctx.group, ctx.cache, 'Maint')
-    const isLiqorHealthy = liqorHealth.toNumber() > minLiqorHealth
+    const isLiqorHealthy = liqorHealth.toNumber() > MIN_LIQOR_HEALTH
 
     if (!isLiqorHealthy) {
         console.error(`Liquidator unhealthy at ${liqorHealth}, waiting...`);
@@ -977,7 +977,7 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
-    if (!shouldBalance) {
+    if (!SHOULD_BALANCE) {
         return
     }
     const debug = debugCreator('liquidator:balanceAccount')
