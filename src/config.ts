@@ -46,6 +46,11 @@ export const shouldBalance = process.env.BALANCE
 export const minLiqorHealth = parseInt(
   process.env.MIN_LIQOR_HEALTH || '25',
 );  
+// Do not liquidate accounts that have less than this much in value
+export const MIN_EQUITY = parseInt(
+  process.env.MIN_EQUITY || '1',
+);
+
 /**
  * Modes:
  * 0 - Liquidator Only

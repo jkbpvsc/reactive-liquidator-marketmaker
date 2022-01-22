@@ -34,6 +34,7 @@ import {
     LOG_TIME,
     MAX_ACTIVE_TX,
     minLiqorHealth,
+    MIN_EQUITY,
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
     shouldBalance,
@@ -354,6 +355,11 @@ async function checkTriggerOrders(ctx: BotContext) {
     }))
 }
 
+function passesEquityThreshold(account: MangoAccount, ctx: BotContext) {
+    const equity = account.computeValue(ctx.group, ctx.cache).toNumber()
+    return equity >= MIN_EQUITY
+}
+
 async function checkMangoAccounts(ctx: BotContext) {
     const debug = debugCreator('liquidator:accountInspector');
 
@@ -363,6 +369,11 @@ async function checkMangoAccounts(ctx: BotContext) {
 
             if (!account.isLiquidatable(ctx.group, ctx.cache)) {
                 debug(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
+                return
+            }
+
+            if (!passesEquityThreshold(account, ctx)) {
+                // debug(`Account ${account.publicKey.toBase58()} doesn't have enough equity, PASS`)
                 return
             }
 
@@ -394,6 +405,11 @@ async function liquidateAccount(
         return;
     }
 
+    if (!passesEquityThreshold(account, ctx)) {
+      // console.log(`Account ${mangoAccountKeyString} doesn't have enough equity, PASS`)
+      return;
+    }
+
     const debug = debugCreator('liquidator:exe:liquidator')
     debug('Liquidating account', account.publicKey.toString());
 
@@ -420,7 +436,7 @@ async function liquidateAccount(
     await account.reload(ctx.connection, ctx.group.dexProgramId);
     if (!account.isLiquidatable(ctx.group, ctx.cache)) {
         debug('Account', account.publicKey.toString(), 'no longer liquidatable');
-        throw new Error('Account no longer liquidatable');
+        throw new Error(`Account ${account.publicKey.toString()} no longer liquidatable`);
     }
 
     while (account.hasAnySpotOrders()) {
