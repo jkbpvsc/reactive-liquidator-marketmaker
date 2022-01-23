@@ -21,6 +21,7 @@ import path from "path";
 import {startMarketMaker} from "./market_maker";
 import {BOT_MODE, BotModes} from "./config";
 
+import AsyncLock from 'async-lock';
 
 debugCreator.log = console.info.bind(console);
 
@@ -43,7 +44,12 @@ export interface BotContext {
     },
     marketMaker: {
         params: any,
-
+    },
+    control: {
+        activeTxReg: {
+            [txId: string]: boolean
+        },
+        lock: AsyncLock
     }
 }
 
@@ -62,7 +68,7 @@ async function run() {
 }
 
 async function createContext(): Promise<BotContext> {
-    const debug = debugCreator('john-wayne');
+    const debug = debugCreator('bot');
     debug('Starting bot');
     const config = new Config(IDS);
     const cluster = (process.env.CLUSTER || 'mainnet') as Cluster;
@@ -176,6 +182,10 @@ async function createContext(): Promise<BotContext> {
         },
         marketMaker: {
             params,
+        },
+        control: {
+            activeTxReg: {},
+            lock: new AsyncLock(),
         }
     }
 }

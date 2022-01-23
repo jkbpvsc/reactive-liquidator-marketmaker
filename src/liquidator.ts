@@ -4,6 +4,10 @@ import {
     AssetType,
     getMultipleAccounts,
     I80F48,
+    makeCachePricesInstruction,
+    makeExecutePerpTriggerOrderInstruction, makeLiquidatePerpMarketInstruction,
+    makeLiquidateTokenAndPerpInstruction,
+    makeLiquidateTokenAndTokenInstruction,
     MangoAccount,
     MangoAccountLayout,
     MangoCacheLayout,
@@ -14,7 +18,7 @@ import {
     ZERO_I80F48,
     zeroKey
 } from "@blockworks-foundation/mango-client";
-import {AccountInfo, KeyedAccountInfo} from "@solana/web3.js";
+import {AccountInfo, KeyedAccountInfo, Transaction} from "@solana/web3.js";
 import {OpenOrders} from "@project-serum/serum";
 import debugCreator from 'debug';
 import BN from "bn.js";
@@ -24,20 +28,19 @@ import {
     BOT_MODE,
     BotModes,
     CHECK_TRIGGERS,
+    COMMITMENT,
     HEALTH_THRESHOLD,
     INTERVAL,
+    LOG_TIME,
+    MAX_ACTIVE_TX,
+    MIN_EQUITY,
+    MIN_LIQOR_HEALTH,
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
+    SHOULD_BALANCE,
     TARGETS,
-    TX_CACHE_RESET_DELAY,
-    COMMITMENT, MAX_ACTIVE_TX
+    TX_CACHE_RESET_DELAY
 } from './config'
-
-const control = {
-    refreshing: false,
-    activeTxCache: {},
-    checkRebalance: false,
-}
 
 const websocket = {
     mangoSubscriptionId: -1,
@@ -57,7 +60,7 @@ export async function startLiquidator(context: BotContext) {
 }
 
 async function refreshMangoAccounts(context: BotContext) {
-    console.time('refreshAccounts')
+    logTime('refreshAccounts')
     const debug = debugCreator('liquidator:refreshAccounts');
     debug('Refreshing Mango accounts');
     const mangoAccounts = await context.client.getAllMangoAccounts(context.group, undefined, true);
@@ -69,7 +72,7 @@ async function refreshMangoAccounts(context: BotContext) {
     }
 
     debug('Done');
-    console.timeEnd('refreshAccounts')
+    logTime('refreshAccounts', true)
     setTimeout(refreshMangoAccounts, REFRESH_ACCOUNT_INTERVAL, context);
 }
 
@@ -179,7 +182,7 @@ function setWebsocketSubscriptions(context: BotContext) {
 
 async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: BotContext) {
     const latencyTag = 'cacheUpdate-' + Date.now();
-    console.time(latencyTag)
+    logTime(latencyTag)
     const pk = context.cache.publicKey;
     context.cache = MangoCacheLayout.decode(accountInfo.data);
     context.cache.publicKey = pk;
@@ -190,19 +193,19 @@ async function processCacheUpdate(accountInfo: AccountInfo<Buffer>, context: Bot
     ]);
 
     await balanceAccount(context);
-    console.timeEnd(latencyTag)
+    logTime(latencyTag, true)
 }
 
 async function processMangoUpdate({ accountId, accountInfo }: KeyedAccountInfo, context: BotContext) {
     const latencyTag = 'mangoUpdate-' + Date.now();
-    console.time(latencyTag)
+    logTime(latencyTag);
     const mangoAccount = new MangoAccount(accountId, MangoAccountLayout.decode(accountInfo.data));
     triageMangoAccount(mangoAccount, context);
 
     if (CHECK_TRIGGERS) {
         await triageTriggers(mangoAccount, context);
     }
-    console.timeEnd(latencyTag)
+    logTime(latencyTag, true);
 }
 
 function triageMangoAccount(mangoAccount: MangoAccount, ctx: BotContext) {
@@ -254,7 +257,7 @@ async function triageTriggers(mangoAccount: MangoAccount, ctx: BotContext) {
 
 async function processDexUpdate({ accountId, accountInfo }: KeyedAccountInfo, ctx: BotContext) {
     const latencyTag = 'dexUpdate-' + Date.now();
-    console.time(latencyTag)
+    logTime(latencyTag)
 
     const debug = debugCreator('liquidator:sub:dex')
     const ownerIndex = ctx.liquidator.mangoAccounts.findIndex((account) =>
@@ -273,7 +276,7 @@ async function processDexUpdate({ accountId, accountInfo }: KeyedAccountInfo, ct
     } else {
         debug('Could not match OpenOrdersAccount to MangoAccount');
     }
-    console.timeEnd(latencyTag)
+    logTime(latencyTag, true);
 }
 
 async function checkTriggerOrders(ctx: BotContext) {
@@ -281,59 +284,84 @@ async function checkTriggerOrders(ctx: BotContext) {
         return
     }
 
-    const debug = debugCreator('liquidator:exe:perpOrderTriggers')
-    await Promise.all(ctx.liquidator.perpTriggers
-        .filter(e => e !== null)
+    const debug = debugCreator('liquidator:exe:advancedOrders')
+
+    const validTriggers = ctx.liquidator.perpTriggers.filter(e => e !== null);
+
+    debug(`Advanced order queue ${validTriggers.length}`)
+
+    await Promise.all(validTriggers
         .map(async (queueElement, index) => {
 
         const { order, mangoAccount } = queueElement!;
 
         const currentPrice = ctx.cache.priceCache[order.marketIndex].price;
         const configMarketIndex = ctx.groupConfig.perpMarkets.findIndex((pm) => pm.marketIndex === order.marketIndex);
+        const perpMarket = ctx.perpMarkets[configMarketIndex];
 
-        if (
+            if (
             (order.triggerCondition == 'above' &&
                 currentPrice.gt(order.triggerPrice)) ||
             (order.triggerCondition == 'below' &&
                 currentPrice.lt(order.triggerPrice))
         ) {
-            const cacheKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
+            const txKey = `trigger-${mangoAccount.publicKey.toString()}-${queueElement!.index}`;
 
-            try {
-                if (Object.values(control.activeTxCache).length >= MAX_ACTIVE_TX) {
-                    debug(`skipping, too many active transactions`);
-                    return
+            debug(`Processing trigger ${txKey}, index: ${index}`)
+            debug(`Order ${order.clientOrderId}`)
+
+            ctx.liquidator.perpTriggers[index] = null
+
+            if (await canExecuteTx(txKey, ctx)) {
+                try {
+                    const transaction = new Transaction();
+
+                    transaction.add(makeCachePricesInstruction(
+                        ctx.groupConfig.mangoProgramId,
+                        ctx.group.publicKey,
+                        ctx.cache.publicKey,
+                        ctx.group.oracles
+                    ));
+
+                    transaction.add(makeExecutePerpTriggerOrderInstruction(
+                        ctx.groupConfig.mangoProgramId,
+                        ctx.group.publicKey,
+                        mangoAccount.publicKey,
+                        mangoAccount.advancedOrdersKey,
+                        ctx.payer.publicKey,
+                        ctx.group.mangoCache,
+                        perpMarket.publicKey,
+                        perpMarket.bids,
+                        perpMarket.asks,
+                        perpMarket.eventQueue,
+                        mangoAccount.spotOpenOrders,
+                        new BN(queueElement!.index),
+                    ));
+
+                    await ctx.client.sendTransaction(transaction, ctx.payer, [])
+
+                    debug(`Processing ${txKey} successful`)
+
+                    clearAtx(txKey, ctx, true);
+                } catch (e) {
+                    debug(`Processing ${txKey} failed`)
+                    debug(e)
+                    console.error(e)
+
+                    clearAtx(txKey, ctx);
                 }
-
-                if (control.activeTxCache[cacheKey]) {
-                    debug(`skipping: ${cacheKey}`)
-                    return
-                }
-
-                debug(`executing trigger order for account ${mangoAccount.publicKey.toBase58()}`,);
-
-                ctx.liquidator.perpTriggers[index] = null
-                control.activeTxCache[cacheKey] = true;
-
-                await ctx.client.executePerpTriggerOrder(
-                    ctx.group,
-                    mangoAccount,
-                    ctx.cache,
-                    ctx.perpMarkets[configMarketIndex],
-                    ctx.payer,
-                    queueElement!.index,
-                );
-            } catch (e) {
-                console.error(e)
-            } finally {
-                resetCache(cacheKey)
             }
         }
     }))
 }
 
+function passesEquityThreshold(account: MangoAccount, ctx: BotContext) {
+    const equity = account.computeValue(ctx.group, ctx.cache).toNumber()
+    return equity >= MIN_EQUITY
+}
+
 async function checkMangoAccounts(ctx: BotContext) {
-    const debug = debugCreator('liquidator:susAccountInspector');
+    const debug = debugCreator('liquidator:accountInspector');
 
     await Promise.all(ctx.liquidator.mangoAccounts.map(async (account, i) => {
         if (account.isLiquidatable(ctx.group, ctx.cache)) {
@@ -343,24 +371,22 @@ async function checkMangoAccounts(ctx: BotContext) {
                 debug(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
                 return
             }
-            const cacheKey = `liquidate-${account.publicKey.toString()}}`;
-            try {
-                if (Object.values(control.activeTxCache).length >= MAX_ACTIVE_TX) {
-                    debug(`skipping, too many active transactions`);
-                    return
-                }
 
-                if (control.activeTxCache[cacheKey]) {
-                    debug(`SKIP: ${cacheKey} active, skipping`)
-                    return
-                }
+            if (!passesEquityThreshold(account, ctx)) {
+                // debug(`Account ${account.publicKey.toBase58()} doesn't have enough equity, PASS`)
+                return
+            }
 
-                control.activeTxCache[cacheKey] = true;
-                await liquidateAccount(account, ctx);
-            } catch (e) {
-                console.error(e)
-            } finally {
-                resetCache(cacheKey)
+            const txKey = `liquidate-${account.publicKey.toString()}}`;
+            if (await canExecuteTx(txKey, ctx)) {
+                try {
+                    await liquidateAccount(account, ctx);
+                } catch (e) {
+                    debug(`Processing ${txKey} failed`)
+                    console.error(e)
+                } finally {
+                    clearAtx(txKey, ctx);
+                }
             }
         }
     }))
@@ -370,6 +396,20 @@ async function liquidateAccount(
     account: MangoAccount,
     ctx: BotContext,
 ) {
+    let liqorHealth = ctx.account.getHealthRatio(ctx.group, ctx.cache, 'Maint')
+    const isLiqorHealthy = liqorHealth.toNumber() > MIN_LIQOR_HEALTH
+
+    if (!isLiqorHealthy) {
+        console.error(`Liquidator unhealthy at ${liqorHealth}, waiting...`);
+        await sleep(INTERVAL * 4);
+        return;
+    }
+
+    if (!passesEquityThreshold(account, ctx)) {
+      // console.log(`Account ${mangoAccountKeyString} doesn't have enough equity, PASS`)
+      return;
+    }
+
     const debug = debugCreator('liquidator:exe:liquidator')
     debug('Liquidating account', account.publicKey.toString());
 
@@ -396,7 +436,7 @@ async function liquidateAccount(
     await account.reload(ctx.connection, ctx.group.dexProgramId);
     if (!account.isLiquidatable(ctx.group, ctx.cache)) {
         debug('Account', account.publicKey.toString(), 'no longer liquidatable');
-        throw new Error('Account no longer liquidatable');
+        throw new Error(`Account ${account.publicKey.toString()} no longer liquidatable`);
     }
 
     while (account.hasAnySpotOrders()) {
@@ -409,6 +449,7 @@ async function liquidateAccount(
             if (baseRootBank && quoteRootBank) {
                 if (account.inMarginBasket[i]) {
                     debug('forceCancelOrders ', i);
+
                     await ctx.client.forceCancelSpotOrders(
                         ctx.group,
                         account,
@@ -429,8 +470,6 @@ async function liquidateAccount(
             throw new Error('Account no longer liquidatable');
         }
     }
-
-    control.checkRebalance = true;
 
     const healthComponents = account.getHealthComponents(ctx.group, ctx.cache);
     const maintHealths = account.getHealthsFromComponents(
@@ -487,7 +526,9 @@ async function liquidateAccount(
 
 async function liquidateSpot(
     liqee: MangoAccount,
-    {
+    ctx: BotContext,
+) {
+    const {
         cache,
         group,
         rootBanks,
@@ -496,8 +537,8 @@ async function liquidateSpot(
         connection,
         payer,
         perpMarkets
-    }: BotContext,
-) {
+    } = ctx;
+
     const debug = debugCreator('liquidator:exe:liquidator:spot')
     debug('liquidateSpot');
 
@@ -602,28 +643,84 @@ async function liquidateSpot(
                 }
 
                 debug('liquidateTokenAndPerp ' + highestHealthMarket.marketIndex);
-                await client.liquidateTokenAndPerp(
-                    group,
-                    liqee,
-                    account,
-                    liabRootBank,
-                    payer,
+                // await client.liquidateTokenAndPerp(
+                //     group,
+                //     liqee,
+                //     account,
+                //     liabRootBank,
+                //     payer,
+                //     AssetType.Perp,
+                //     highestHealthMarket.marketIndex,
+                //     AssetType.Token,
+                //     minNetIndex,
+                //     liqee.perpAccounts[highestHealthMarket.marketIndex].quotePosition,
+                // );
+
+                const transaction = new Transaction();
+
+                transaction.add(makeCachePricesInstruction(
+                    ctx.groupConfig.mangoProgramId,
+                    ctx.group.publicKey,
+                    ctx.cache.publicKey,
+                    ctx.group.oracles
+                ));
+
+                transaction.add(makeLiquidateTokenAndPerpInstruction(
+                    ctx.groupConfig.mangoProgramId,
+                    ctx.group.publicKey,
+                    ctx.cache.publicKey,
+                    liqee.publicKey,
+                    account.publicKey,
+                    payer.publicKey,
+                    liabRootBank.publicKey,
+                    liabRootBank.nodeBanks[0],
+                    liqee.spotOpenOrders,
+                    account.spotOpenOrders,
                     AssetType.Perp,
-                    highestHealthMarket.marketIndex,
+                    new BN(highestHealthMarket.marketIndex),
                     AssetType.Token,
-                    minNetIndex,
+                    new BN(minNetIndex),
                     liqee.perpAccounts[highestHealthMarket.marketIndex].quotePosition,
-                );
+                ))
+
+                await ctx.client.sendTransaction(transaction, ctx.payer, [])
             } else {
-                await client.liquidateTokenAndToken(
-                    group,
-                    liqee,
-                    account,
-                    assetRootBank,
-                    liabRootBank,
-                    payer,
+                const transaction = new Transaction();
+
+                transaction.add(makeCachePricesInstruction(
+                    ctx.groupConfig.mangoProgramId,
+                    ctx.group.publicKey,
+                    ctx.cache.publicKey,
+                    ctx.group.oracles
+                ));
+
+                transaction.add(makeLiquidateTokenAndTokenInstruction(
+                    ctx.groupConfig.mangoProgramId,
+                    ctx.group.publicKey,
+                    ctx.cache.publicKey,
+                    liqee.publicKey,
+                    account.publicKey,
+                    payer.publicKey,
+                    assetRootBank.publicKey,
+                    assetRootBank.nodeBanks[0], // Randomize node bank pick
+                    liabRootBank.publicKey,
+                    liabRootBank.nodeBanks[0], // Randomize node bank pick
+                    liqee.spotOpenOrders,
+                    account.spotOpenOrders,
                     maxLiabTransfer,
-                );
+                ))
+
+                await ctx.client.sendTransaction(transaction, ctx.payer, [])
+
+                // await client.liquidateTokenAndToken(
+                //     group,
+                //     liqee,
+                //     account,
+                //     assetRootBank,
+                //     liabRootBank,
+                //     payer,
+                //     maxLiabTransfer,
+                // );
             }
 
             await liqee.reload(connection, group.dexProgramId);
@@ -649,7 +746,9 @@ async function liquidateSpot(
 
 async function liquidatePerps(
     liqee: MangoAccount,
-    {
+    ctx: BotContext,
+) {
+    const {
         perpMarkets,
         group,
         cache,
@@ -658,8 +757,8 @@ async function liquidatePerps(
         account,
         rootBanks,
         client
-    }: BotContext,
-) {
+    } = ctx;
+
     const debug = debugCreator('liquidator:exe:liquidator:perps')
     debug('liquidatePerps');
     const lowestHealthMarket = perpMarkets
@@ -747,18 +846,47 @@ async function liquidatePerps(
                         ONE_I80F48.sub(group.spotMarkets[maxNetIndex].initAssetWeight),
                     );
                 }
-                await client.liquidateTokenAndPerp(
-                    group,
-                    liqee,
-                    account,
-                    assetRootBank,
-                    payer,
+                // await client.liquidateTokenAndPerp(
+                //     group,
+                //     liqee,
+                //     account,
+                //     assetRootBank,
+                //     payer,
+                //     AssetType.Token,
+                //     maxNetIndex,
+                //     AssetType.Perp,
+                //     marketIndex,
+                //     maxLiabTransfer,
+                // );
+
+                const transaction = new Transaction();
+
+                transaction.add(makeCachePricesInstruction(
+                    ctx.groupConfig.mangoProgramId,
+                    ctx.group.publicKey,
+                    ctx.cache.publicKey,
+                    ctx.group.oracles
+                ));
+
+                transaction.add(makeLiquidateTokenAndPerpInstruction(
+                    ctx.groupConfig.mangoProgramId,
+                    ctx.group.publicKey,
+                    ctx.cache.publicKey,
+                    liqee.publicKey,
+                    account.publicKey,
+                    payer.publicKey,
+                    assetRootBank.publicKey,
+                    assetRootBank.nodeBanks[0],
+                    liqee.spotOpenOrders,
+                    account.spotOpenOrders,
                     AssetType.Token,
-                    maxNetIndex,
+                    new BN(maxNetIndex),
                     AssetType.Perp,
-                    marketIndex,
+                    new BN(marketIndex),
                     maxLiabTransfer,
-                );
+                ))
+
+                await ctx.client.sendTransaction(transaction, ctx.payer, [])
             }
         } else {
             debug('liquidatePerpMarket ' + marketIndex);
@@ -768,7 +896,7 @@ async function liquidatePerps(
             const perpMarketInfo = group.perpMarkets[marketIndex];
             const initAssetWeight = perpMarketInfo.initAssetWeight;
             const initLiabWeight = perpMarketInfo.initLiabWeight;
-            let baseTransferRequest;
+            let baseTransferRequest: BN;
             if (perpAccount.basePosition.gte(ZERO_BN)) {
                 // TODO adjust for existing base position on liqor
                 baseTransferRequest = new BN(
@@ -790,14 +918,39 @@ async function liquidatePerps(
                 ).neg();
             }
 
-            await client.liquidatePerpMarket(
-                group,
-                liqee,
-                account,
-                perpMarket,
-                payer,
+            // await client.liquidatePerpMarket(
+            //     group,
+            //     liqee,
+            //     account,
+            //     perpMarket,
+            //     payer,
+            //     baseTransferRequest,
+            // );
+
+            const transaction = new Transaction();
+
+            transaction.add(makeCachePricesInstruction(
+                ctx.groupConfig.mangoProgramId,
+                ctx.group.publicKey,
+                ctx.cache.publicKey,
+                ctx.group.oracles
+            ));
+
+            transaction.add(makeLiquidatePerpMarketInstruction(
+                ctx.groupConfig.mangoProgramId,
+                ctx.group.publicKey,
+                ctx.cache.publicKey,
+                perpMarket.publicKey,
+                perpMarket.eventQueue,
+                liqee.publicKey,
+                account.publicKey,
+                payer.publicKey,
+                liqee.spotOpenOrders,
+                account.spotOpenOrders,
                 baseTransferRequest,
-            );
+            ))
+
+            await ctx.client.sendTransaction(transaction, ctx.payer, [])
         }
 
         await sleep(INTERVAL);
@@ -824,40 +977,46 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
-    if (!control.checkRebalance) {
+    if (!SHOULD_BALANCE) {
         return
     }
+    const debug = debugCreator('liquidator:balanceAccount')
+    debug('Acquiring lock')
+    ctx.control.lock.acquire('balanceAccount', async () => {
+        debug('Lock acquired')
+        const {
+            spotMarkets,
+            perpMarkets,
+            group,
+            account
+        } = ctx;
 
-    control.checkRebalance = false
-
-    const {
-        spotMarkets,
-        perpMarkets,
-        group,
-        account
-    } = ctx;
-
-    const {diffs, netValues} = getDiffsAndNet(ctx);
-    const tokensUnbalanced = netValues.some(
-        (nv) => Math.abs(diffs[nv[0]].toNumber()) > spotMarkets[nv[0]].minOrderSize,
-    );
-    const positionsUnbalanced = perpMarkets.some((pm) => {
-        const index = group.getPerpMarketIndex(pm.publicKey);
-        const perpAccount = account.perpAccounts[index];
-        const basePositionSize = Math.abs(
-            pm.baseLotsToNumber(perpAccount.basePosition),
+        const {diffs, netValues} = getDiffsAndNet(ctx);
+        const tokensUnbalanced = netValues.some(
+            (nv) => Math.abs(diffs[nv[0]].toNumber()) > spotMarkets[nv[0]].minOrderSize,
         );
+        const positionsUnbalanced = perpMarkets.some((pm) => {
+            const index = group.getPerpMarketIndex(pm.publicKey);
+            const perpAccount = account.perpAccounts[index];
+            const basePositionSize = Math.abs(
+                pm.baseLotsToNumber(perpAccount.basePosition),
+            );
 
-        return basePositionSize != 0 || perpAccount.quotePosition.gt(ZERO_I80F48);
+            return basePositionSize != 0 || perpAccount.quotePosition.gt(ZERO_I80F48);
+        });
+
+        debug(`Tokens unbalanced: ${tokensUnbalanced}, positions unbalanced ${positionsUnbalanced}`);
+
+        if (tokensUnbalanced) {
+            await balanceTokens(ctx);
+        }
+
+        if (positionsUnbalanced) {
+            await closePositions(ctx);
+        }
+
+        debug('Lock released')
     });
-
-    if (tokensUnbalanced) {
-        await balanceTokens(ctx);
-    }
-
-    if (positionsUnbalanced) {
-        await closePositions(ctx);
-    }
 }
 
 async function balanceTokens(
@@ -1119,6 +1278,57 @@ async function closePositions(
     }
 }
 
-function resetCache(key) {
-    setTimeout(() => { delete control.activeTxCache[key] }, TX_CACHE_RESET_DELAY);
+const LOCK_KEY = 'atx_lock';
+
+function canExecuteTx(key: string, ctx: BotContext): Promise<boolean> {
+    return new Promise<boolean>(((resolve, reject) => {
+        ctx.control.lock.acquire(LOCK_KEY, () => {
+            const debug = debugCreator('liquidator:exe:tx:controller')
+
+            debug(`Diagnostic: eval tx key ${key}`)
+
+            const activeTxsCount = Object.keys(ctx.control.activeTxReg).length;
+            debug(`Active txs ${activeTxsCount}`)
+
+            if (ctx.control.activeTxReg[key]) {
+                debug(`Tx active ${key}, skipping`)
+                resolve(false);
+                return
+            }
+
+            if (activeTxsCount >= MAX_ACTIVE_TX) {
+                debug(`Too many active txs, skipping`)
+                resolve(false);
+                return
+            }
+
+            ctx.control.activeTxReg[key] = true;
+            resolve(true);
+        });
+    }))
+}
+
+function clearAtx(key: string, ctx: BotContext, instant: boolean = false) {
+    const debug = debugCreator('liquidator:exe:tx:controller')
+    const delayTime = instant ? 0 : TX_CACHE_RESET_DELAY
+
+    debug(`Priming remove ${key} from active tx reg in ${ delayTime /(1000 * 60)}m, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
+    setTimeout(() => {
+        ctx.control.lock.acquire(LOCK_KEY, () => {
+            delete ctx.control.activeTxReg[key]
+            debug(`Removing ${key} from active tx reg, ${Object.keys(ctx.control.activeTxReg).length} atx remaining`);
+        });
+    }, delayTime);
+}
+
+function logTime(label: string, end: boolean = false) {
+    if (!LOG_TIME) {
+       return
+    }
+
+    if (!end) {
+        console.time(label);
+    } else {
+        console.timeEnd(label)
+    }
 }
