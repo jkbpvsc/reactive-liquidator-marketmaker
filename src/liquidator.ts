@@ -33,8 +33,11 @@ import {
     INTERVAL,
     LOG_TIME,
     MAX_ACTIVE_TX,
+    MIN_EQUITY,
+    MIN_LIQOR_HEALTH,
     REFRESH_ACCOUNT_INTERVAL,
     REFRESH_WEBSOCKET_INTERVAL,
+    SHOULD_BALANCE,
     TARGETS,
     TX_CACHE_RESET_DELAY
 } from './config'
@@ -352,6 +355,11 @@ async function checkTriggerOrders(ctx: BotContext) {
     }))
 }
 
+function passesEquityThreshold(account: MangoAccount, ctx: BotContext) {
+    const equity = account.computeValue(ctx.group, ctx.cache).toNumber()
+    return equity >= MIN_EQUITY
+}
+
 async function checkMangoAccounts(ctx: BotContext) {
     const debug = debugCreator('liquidator:accountInspector');
 
@@ -363,6 +371,12 @@ async function checkMangoAccounts(ctx: BotContext) {
                 debug(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
                 return
             }
+
+            if (!passesEquityThreshold(account, ctx)) {
+                // debug(`Account ${account.publicKey.toBase58()} doesn't have enough equity, PASS`)
+                return
+            }
+
             const txKey = `liquidate-${account.publicKey.toString()}}`;
             if (await canExecuteTx(txKey, ctx)) {
                 try {
@@ -382,6 +396,20 @@ async function liquidateAccount(
     account: MangoAccount,
     ctx: BotContext,
 ) {
+    let liqorHealth = ctx.account.getHealthRatio(ctx.group, ctx.cache, 'Maint')
+    const isLiqorHealthy = liqorHealth.toNumber() > MIN_LIQOR_HEALTH
+
+    if (!isLiqorHealthy) {
+        console.error(`Liquidator unhealthy at ${liqorHealth}, waiting...`);
+        await sleep(INTERVAL * 4);
+        return;
+    }
+
+    if (!passesEquityThreshold(account, ctx)) {
+      // console.log(`Account ${mangoAccountKeyString} doesn't have enough equity, PASS`)
+      return;
+    }
+
     const debug = debugCreator('liquidator:exe:liquidator')
     debug('Liquidating account', account.publicKey.toString());
 
@@ -408,7 +436,7 @@ async function liquidateAccount(
     await account.reload(ctx.connection, ctx.group.dexProgramId);
     if (!account.isLiquidatable(ctx.group, ctx.cache)) {
         debug('Account', account.publicKey.toString(), 'no longer liquidatable');
-        throw new Error('Account no longer liquidatable');
+        throw new Error(`Account ${account.publicKey.toString()} no longer liquidatable`);
     }
 
     while (account.hasAnySpotOrders()) {
@@ -949,6 +977,9 @@ async function liquidatePerps(
 }
 
 async function balanceAccount(ctx: BotContext) {
+    if (!SHOULD_BALANCE) {
+        return
+    }
     const debug = debugCreator('liquidator:balanceAccount')
     debug('Acquiring lock')
     ctx.control.lock.acquire('balanceAccount', async () => {

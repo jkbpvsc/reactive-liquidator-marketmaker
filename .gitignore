@@ -1,3 +1,10 @@
+bal*.sh
+sync*.sh
+trig*.sh
+full*.sh
+liq*.sh
+# Params - to be customized
+params/default.json
 # Logs
 logs
 *.log
