@@ -355,9 +355,22 @@ async function checkTriggerOrders(ctx: BotContext) {
     }))
 }
 
+function liquidatorAccountHealthy(ctx: BotContext): boolean {
+    let liqorHealth = ctx.account.getHealthRatio(ctx.group, ctx.cache, 'Maint')
+
+    return liqorHealth.toNumber() > MIN_LIQOR_HEALTH
+}
+
 function passesEquityThreshold(account: MangoAccount, ctx: BotContext) {
     const equity = account.computeValue(ctx.group, ctx.cache).toNumber()
-    return equity >= MIN_EQUITY
+
+    const hasMinEquity = equity >= MIN_EQUITY;
+
+    if (!hasMinEquity) {
+        console.log(`Account ${account.publicKey.toString()} doesn't have enough equity ${equity}, PASS`)
+    }
+
+    return hasMinEquity
 }
 
 async function checkMangoAccounts(ctx: BotContext) {
@@ -369,11 +382,6 @@ async function checkMangoAccounts(ctx: BotContext) {
 
             if (!account.isLiquidatable(ctx.group, ctx.cache)) {
                 debug(`Account ${account.publicKey.toBase58()} no longer liquidatable`);
-                return
-            }
-
-            if (!passesEquityThreshold(account, ctx)) {
-                // debug(`Account ${account.publicKey.toBase58()} doesn't have enough equity, PASS`)
                 return
             }
 
@@ -396,17 +404,13 @@ async function liquidateAccount(
     account: MangoAccount,
     ctx: BotContext,
 ) {
-    let liqorHealth = ctx.account.getHealthRatio(ctx.group, ctx.cache, 'Maint')
-    const isLiqorHealthy = liqorHealth.toNumber() > MIN_LIQOR_HEALTH
 
-    if (!isLiqorHealthy) {
-        console.error(`Liquidator unhealthy at ${liqorHealth}, waiting...`);
-        await sleep(INTERVAL * 4);
+    if (!liquidatorAccountHealthy(ctx)) {
+        console.error(`Liquidator unhealthy`);
         return;
     }
 
     if (!passesEquityThreshold(account, ctx)) {
-      // console.log(`Account ${mangoAccountKeyString} doesn't have enough equity, PASS`)
       return;
     }
 
