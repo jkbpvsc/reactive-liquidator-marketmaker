@@ -23,6 +23,7 @@ To run the liquidator you will need:
 | `GROUP` | `mainnet.1` | Name of the group in ids.json to run the Liquidator against |
 | `TARGETS` | `0 0 0 0 0 0 0 0` | Space separated list of the amount of each asset to maintain when rebalancing |
 | `INTERVAL` | `3500` | Milliseconds to wait before checking for sick accounts |
+| `MIN_EQUITY` | `1` | Minimum equity an account should hold before we bother attempting to liquidate it |
 | `INTERVAL_ACCOUNTS` | `120000` | Milliseconds to wait before reloading all Mango accounts |
 | `INTERVAL_WEBSOCKET` | `300000` | Milliseconds to wait before reconnecting to the websocket |
 | `LIQOR_PK` | N/A | Liqor Mango account Public Key, by default uses the largest value account owned by the keypair |
