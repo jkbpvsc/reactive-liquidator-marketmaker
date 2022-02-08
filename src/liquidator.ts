@@ -1057,8 +1057,9 @@ async function balanceTokens(
             : [];
 
         for (let i = 0; i < spotMarkets.length; i++) {
+            const marketIndex = group.getSpotMarketIndex(spotMarkets[i].publicKey);
             const orders = [...bids[i], ...asks[i]].filter((o) =>
-                o.openOrdersAddress.equals(account.spotOpenOrders[i]),
+                o.openOrdersAddress.equals(account.spotOpenOrders[marketIndex]),
             );
 
             for (const order of orders) {
@@ -1073,7 +1074,7 @@ async function balanceTokens(
                 );
             }
         }
-        debug('Cancelling ' + cancelOrdersPromises.length + ' orders');
+        debug(`Cancelling ${cancelOrdersPromises.length} orders`);
         await Promise.all(cancelOrdersPromises);
 
         const openOrders = await account.loadOpenOrders(
@@ -1082,7 +1083,8 @@ async function balanceTokens(
         );
         const settlePromises: Promise<string>[] = [];
         for (let i = 0; i < spotMarkets.length; i++) {
-            const oo = openOrders[i];
+            const marketIndex = group.getSpotMarketIndex(spotMarkets[i].publicKey);
+            const oo = openOrders[marketIndex];
             if (
                 oo &&
                 (oo.quoteTokenTotal.add(oo['referrerRebatesAccrued']).gt(new BN(0)) ||
@@ -1093,72 +1095,50 @@ async function balanceTokens(
                 );
             }
         }
-        debug('Settling on ' + settlePromises.length + ' markets');
+        debug(`Settling on ${settlePromises.length} markets`);
         await Promise.all(settlePromises);
 
         const { diffs, netValues } = getDiffsAndNet(ctx);
 
         netValues.sort((a, b) => b[1].sub(a[1]).toNumber());
         for (let i = 0; i < groupConfig!.spotMarkets.length; i++) {
-            const marketIndex = netValues[i][0];
-            const market = spotMarkets[marketIndex];
-            if (Math.abs(diffs[marketIndex].toNumber()) > market.minOrderSize) {
-                if (netValues[i][1].gt(ZERO_I80F48)) {
-                    // sell to close
-                    const price = group
-                        .getPrice(marketIndex, cache)
-                        .mul(I80F48.fromNumber(0.95));
-                    debug(
-                        `Sell to close ${marketIndex} ${Math.abs(
-                            diffs[marketIndex].toNumber(),
-                        )} @ ${price.toString()}`,
-                    );
-                    await client.placeSpotOrder(
-                        group,
-                        account,
-                        group.mangoCache,
-                        spotMarkets[marketIndex],
-                        payer,
-                        'sell',
-                        price.toNumber(),
-                        Math.abs(diffs[marketIndex].toNumber()),
-                        'limit',
-                    );
-                    await client.settleFunds(
-                        group,
-                        account,
-                        payer,
-                        spotMarkets[marketIndex],
-                    );
-                } else if (netValues[i][1].lt(ZERO_I80F48)) {
-                    //buy to close
-                    const price = group
-                        .getPrice(marketIndex, cache)
-                        .mul(I80F48.fromNumber(1.05));
+            const marketIndex = netValues[i][2];
+            const netIndex = netValues[i][0];
+            const marketConfig = groupConfig!.spotMarkets.find((m) => m.marketIndex == marketIndex)!
+            const market = spotMarkets.find((m) => m.publicKey.equals(group.spotMarkets[marketIndex].spotMarket))!;
+            const liquidationFee = group.spotMarkets[marketIndex].liquidationFee;
+            if (Math.abs(diffs[netIndex].toNumber()) > market!.minOrderSize) {
+                const side = netValues[i][1].gt(ZERO_I80F48) ? 'sell' : 'buy';
+                const price = group
+                    .getPrice(marketIndex, cache)
+                    .mul(
+                        side == 'buy'
+                            ? ONE_I80F48.add(liquidationFee)
+                            : ONE_I80F48.sub(liquidationFee),
+                    )
+                    .toNumber();
+                const quantity = Math.abs(diffs[netIndex].toNumber());
 
-                    debug(
-                        `Buy to close ${marketIndex} ${Math.abs(
-                            diffs[marketIndex].toNumber(),
-                        )} @ ${price.toString()}`,
-                    );
-                    await client.placeSpotOrder(
-                        group,
-                        account,
-                        group.mangoCache,
-                        spotMarkets[marketIndex],
-                        payer,
-                        'buy',
-                        price.toNumber(),
-                        Math.abs(diffs[marketIndex].toNumber()),
-                        'limit',
-                    );
-                    await client.settleFunds(
-                        group,
-                        account,
-                        payer,
-                        spotMarkets[marketIndex],
-                    );
-                }
+                debug(
+                    `${side}ing ${quantity} of ${marketConfig.baseSymbol} for $${price}`,
+                );
+                await client.placeSpotOrder(
+                    group,
+                    account,
+                    group.mangoCache,
+                    market,
+                    payer,
+                    side,
+                    price,
+                    Math.abs(diffs[netIndex].toNumber()),
+                    'limit',
+                );
+                await client.settleFunds(
+                    group,
+                    account,
+                    payer,
+                    spotMarkets[marketIndex],
+                );
             }
         }
     } catch (err) {
@@ -1168,20 +1148,21 @@ async function balanceTokens(
 
 function getDiffsAndNet({ groupConfig, account, cache, group }: BotContext) {
     const diffs: I80F48[] = [];
-    const netValues: [number, I80F48][] = [];
+    const netValues: [number, I80F48, number][] = [];
+    // Go to each base currency and see if it's above or below target
 
     for (let i = 0; i < groupConfig!.spotMarkets.length; i++) {
         const target = TARGETS[i] !== undefined ? TARGETS[i] : 0;
+        const marketIndex = groupConfig!.spotMarkets[i].marketIndex;
         const diff = account
-            .getUiDeposit(cache.rootBankCache[i], group, i)
-            .sub(account.getUiBorrow(cache.rootBankCache[i], group, i))
+            .getUiDeposit(cache.rootBankCache[marketIndex], group, marketIndex)
+            .sub(account.getUiBorrow(cache.rootBankCache[marketIndex], group, marketIndex))
             .sub(I80F48.fromNumber(target));
-
         diffs.push(diff);
-        netValues.push([i, diff.mul(cache.priceCache[i].price)]);
+        netValues.push([i, diff.mul(cache.priceCache[i].price), marketIndex]);
     }
 
-    return {diffs, netValues};
+    return { diffs, netValues };
 }
 
 async function closePositions(
